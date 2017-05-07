@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: eve/EveLensflare.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: eve/EveLensflare.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/**
+ * EveLensFlare
+ * @property {String} [name='']
+ * @property {boolean} display
+ * @property {boolean} update
+ * @property {boolean} doOcclusionQueries
+ * @property {number} cameraFactor
+ * @property {vec3} position
+ * @property {Array} flares
+ * @property {Array.&lt;EveOccluder>} occluders
+ * @property {Array.&lt;EveOccluder>} backgroundOccluders
+ * @property {number} occlusionIntensity
+ * @property {number} backgroundOcclusionIntensity
+ * @property {Array} distanceToEdgeCurves
+ * @property {Array} distanceToCenterCurves
+ * @property {Array} radialAngleCurves
+ * @property {Array} xDistanceToCenter
+ * @property {Array} yDistanceToCenter
+ * @property {Array} bindings
+ * @property {Array.&lt;Tw2CurveSet> curveSets
+ * @property {null|Tw2Mesh} mesh
+ * @property {quat4} _directionVar
+ * @property {quat4} _occlusionVar
+ * @property {vec3} _direction
+ * @property {mat4} _transform
+ * @constructor
+ */
+function EveLensflare()
+{
+    this.name = '';
+    this.display = true;
+    this.update = true;
+    this.doOcclusionQueries = true;
+    this.cameraFactor = 20;
+    this.position = vec3.create();
+    this.flares = [];
+    this.occluders = [];
+    this.backgroundOccluders = [];
+    this.occlusionIntensity = 1;
+    this.backgroundOcclusionIntensity = 1;
+
+    this.distanceToEdgeCurves = [];
+    this.distanceToCenterCurves = [];
+    this.radialAngleCurves = [];
+    this.xDistanceToCenter = [];
+    this.yDistanceToCenter = [];
+    this.bindings = [];
+    this.curveSets = [];
+
+    this.mesh = null;
+
+    this._directionVar = variableStore.RegisterVariable("LensflareFxDirectionScale", quat4.create());
+    this._occlusionVar = variableStore.RegisterVariable("LensflareFxOccScale", quat4.create([1, 1, 0, 0]));
+    this._direction = vec3.create();
+    this._transform = mat4.create();
+
+    if (!EveLensflare.backBuffer)
+    {
+        EveLensflare.backBuffer = new Tw2TextureRes();
+        EveLensflare.backBuffer.width = 0;
+        EveLensflare.backBuffer.height = 0;
+        EveLensflare.backBuffer.hasMipMaps = false;
+        EveLensflare.occluderLevels = [new Tw2RenderTarget(), new Tw2RenderTarget(), new Tw2RenderTarget(), new Tw2RenderTarget()];
+        EveLensflare.occludedLevelIndex = 0;
+    }
+}
+
+/**
+ * Gets lensflares's res objects
+ * @param {Array} [out=[]] - Optional receiving array
+ * @returns {Array.&lt;Tw2EffectRes|Tw2TextureRes|Tw2GeometryRes>} [out]
+ */
+EveLensflare.prototype.GetResources = function(out)
+{
+    if (out === undefined)
+    {
+        out = [];
+    }
+    
+    if (this.mesh !== null)
+    {
+        this.mesh.GetResources(out);
+    }
+    
+    for (var f = 0; f &lt; this.flares.length; f++)
+    {
+        this.flares[f].GetResources(out);
+    }
+ 
+    for (var o = 0; o &lt; this.occluders.length; o++)
+    {
+        this.occluders[o].GetResources(out);
+    }
+
+    for (var b = 0; b &lt; this.backgroundOccluders.length; b++)
+    {
+        this.backgroundOccluders[b].GetResources(out);
+    }
+ 
+    return out;
+};
+
+/**
+ * Internal helper function
+ * @param out
+ * @param v
+ */
+EveLensflare.prototype.MatrixArcFromForward = function(out, v)
+{
+    var norm = vec3.normalize(v, norm);
+    mat4.identity(out);
+    if (norm[2] &lt; -0.99999)
+    {
+        return;
+    }
+    if (norm[2] > 0.99999)
+    {
+        out[5] = -1.0;
+        out[10] = -1.0;
+        return;
+    }
+    var h = (1 + norm[2]) / (norm[0] * norm[0] + norm[1] * norm[1]);
+    out[0] = h * norm[1] * norm[1] - norm[2];
+    out[1] = -h * norm[0] * norm[1];
+    out[2] = norm[0];
+
+    out[4] = out[1];
+    out[5] = h * norm[0] * norm[0] - norm[2];
+    out[6] = norm[1];
+
+    out[8] = -norm[0];
+    out[9] = -norm[1];
+    out[10] = -norm[2];
+};
+
+/**
+ * Prepares the lensflare for rendering
+ */
+EveLensflare.prototype.PrepareRender = function()
+{
+    if (!this.display)
+    {
+        return;
+    }
+
+    var cameraPos = mat4.multiplyVec3(device.viewInv, vec3.create());
+    if (vec3.length(this.position) == 0)
+    {
+        var curPos = vec3.negate(cameraPos, vec3.create());
+        var distScale = vec3.length(curPos);
+        if (distScale > 1.5)
+        {
+            distScale = 1 / Math.log(distScale);
+        }
+        else
+        {
+            distScale = 2.5;
+        }
+        vec3.normalize(curPos, this._direction);
+    }
+    else
+    {
+        var invPos = vec3.negate(this.position, vec3.create());
+        vec3.normalize(invPos, this._direction);
+    }
+    var viewDir = mat4.multiplyVec4(device.viewInv, quat4.create([0, 0, 1, 0]));
+    var cameraSpacePos = vec3.create();
+    cameraSpacePos[0] = -this.cameraFactor * viewDir[0] + cameraPos[0];
+    cameraSpacePos[1] = -this.cameraFactor * viewDir[1] + cameraPos[1];
+    cameraSpacePos[2] = -this.cameraFactor * viewDir[2] + cameraPos[2];
+
+    var negDirVec = vec3.negate(this._direction, vec3.create());
+    this.MatrixArcFromForward(this._transform, negDirVec);
+    this._transform[12] = cameraSpacePos[0];
+    this._transform[13] = cameraSpacePos[1];
+    this._transform[14] = cameraSpacePos[2];
+
+    var scaleMat = mat4.scale(mat4.identity(mat4.create()), [this.occlusionIntensity, this.occlusionIntensity, 1]);
+    //mat4.multiply(this._transform, scaleMat);
+    this._directionVar.value[0] = this._direction[0];
+    this._directionVar.value[1] = this._direction[1];
+    this._directionVar.value[2] = this._direction[2];
+    this._directionVar.value[3] = 1;
+
+    var d = quat4.create([this._direction[0], this._direction[1], this._direction[2], 0]);
+    mat4.multiplyVec4(device.view, d);
+    mat4.multiplyVec4(device.projection, d);
+    d[0] /= d[3];
+    d[1] /= d[3];
+    var distanceToEdge = 1 - Math.min(1 - Math.abs(d[0]), 1 - Math.abs(d[1]));
+    var distanceToCenter = Math.sqrt(d[0] * d[0] + d[1] * d[1]);
+    var radialAngle = Math.atan2(d[1], d[0]) + Math.PI;
+
+    for (var i = 0; i &lt; this.distanceToEdgeCurves.length; ++i)
+    {
+        this.distanceToEdgeCurves[i].UpdateValue(distanceToEdge);
+    }
+    for (i = 0; i &lt; this.distanceToCenterCurves.length; ++i)
+    {
+        this.distanceToCenterCurves[i].UpdateValue(distanceToCenter);
+    }
+    for (i = 0; i &lt; this.radialAngleCurves.length; ++i)
+    {
+        this.radialAngleCurves[i].UpdateValue(radialAngle);
+    }
+    for (i = 0; i &lt; this.xDistanceToCenter.length; ++i)
+    {
+        this.xDistanceToCenter[i].UpdateValue(d[0] + 10);
+    }
+    for (i = 0; i &lt; this.yDistanceToCenter.length; ++i)
+    {
+        this.yDistanceToCenter[i].UpdateValue(d[1] + 10);
+    }
+    for (i = 0; i &lt; this.bindings.length; ++i)
+    {
+        this.bindings[i].CopyValue();
+    }
+    for (i = 0; i &lt; this.flares.length; ++i)
+    {
+        this.flares[i].UpdateViewDependentData(this._transform);
+    }
+
+};
+
+/**
+ * Updates Occluders
+ */
+EveLensflare.prototype.UpdateOccluders = function()
+{
+    if (!this.doOcclusionQueries)
+    {
+        return;
+    }
+    this.occlusionIntensity = 1;
+    this.backgroundOcclusionIntensity = 1;
+
+    if (!EveLensflare.occluderLevels[0].texture || EveLensflare.occluderLevels[0].width &lt; this.occluders.length * 2)
+    {
+        for (var i = 0; i &lt; EveLensflare.occluderLevels.length; ++i)
+        {
+            EveLensflare.occluderLevels[i].Create(this.occluders.length * 2, 1, false);
+        }
+    }
+    for (var j = 0; j &lt; this.flares.length; ++j)
+    {
+        if ('_backBuffer' in this.flares[j])
+        {
+            this.flares[j]._backBuffer.textureRes = EveLensflare.occluderLevels.texture;
+        }
+    }
+
+    EveLensflare.occluderLevels[EveLensflare.occludedLevelIndex].Set();
+    device.SetStandardStates(device.RM_OPAQUE);
+    device.gl.clearColor(0.0, 0.0, 0.0, 1.0);
+    device.gl.clear(device.gl.COLOR_BUFFER_BIT);
+    EveLensflare.occluderLevels[EveLensflare.occludedLevelIndex].Unset();
+
+    var samples = 1;
+    if (device.antialiasing)
+    {
+        samples = device.msaaSamples;
+        device.gl.sampleCoverage(1. / samples, false);
+    }
+    for (var i = 0; i &lt; this.occluders.length; ++i)
+    {
+        device.SetRenderState(device.RS_COLORWRITEENABLE, 8);
+        device.gl.colorMask(false, false, false, true);
+        device.gl.clearColor(0.0, 0.0, 0.0, 0.0);
+        device.gl.clear(device.gl.COLOR_BUFFER_BIT);
+
+        if (device.antialiasing)
+        {
+            // Turn off antialiasing
+            device.gl.enable(device.gl.SAMPLE_COVERAGE);
+            device.gl.sampleCoverage(0.25, false);
+        }
+        this.occluders[i].UpdateValue(this._transform, i);
+        if (device.antialiasing)
+        {
+            device.gl.disable(device.gl.SAMPLE_COVERAGE);
+        }
+
+        // Copy back buffer into a texture
+        if (!EveLensflare.backBuffer.texture)
+        {
+            EveLensflare.backBuffer.Attach(device.gl.createTexture());
+        }
+        device.gl.bindTexture(device.gl.TEXTURE_2D, EveLensflare.backBuffer.texture);
+        if (EveLensflare.backBuffer.width != device.viewportWidth || EveLensflare.backBuffer.height != device.viewportHeight)
+        {
+            device.gl.texImage2D(device.gl.TEXTURE_2D, 0, device.gl.RGBA, device.viewportWidth, device.viewportHeight, 0, device.gl.RGBA, device.gl.UNSIGNED_BYTE, null);
+            device.gl.texParameteri(device.gl.TEXTURE_2D, device.gl.TEXTURE_MAG_FILTER, device.gl.LINEAR);
+            device.gl.texParameteri(device.gl.TEXTURE_2D, device.gl.TEXTURE_MIN_FILTER, device.gl.LINEAR);
+            EveLensflare.backBuffer.width = device.viewportWidth;
+            EveLensflare.backBuffer.height = device.viewportHeight;
+        }
+        device.gl.copyTexImage2D(device.gl.TEXTURE_2D, 0, device.alphaBlendBackBuffer ? device.gl.RGBA : device.gl.RGB, 0, 0, EveLensflare.backBuffer.width, EveLensflare.backBuffer.height, 0);
+        device.gl.bindTexture(device.gl.TEXTURE_2D, null);
+
+        // Collect samples
+        EveLensflare.occluderLevels[EveLensflare.occludedLevelIndex].Set();
+        this.occluders[i].CollectSamples(EveLensflare.backBuffer, i, EveLensflare.occluderLevels[0].width / 2, samples);
+        EveLensflare.occluderLevels[EveLensflare.occludedLevelIndex].Unset();
+    }
+    if (device.antialiasing)
+    {
+        device.gl.sampleCoverage(1, false);
+    }
+
+    EveLensflare.occluderLevels[(EveLensflare.occludedLevelIndex + 1) % EveLensflare.occluderLevels.length].Set();
+    var pixels = new Uint8Array(EveLensflare.occluderLevels[0].width * 4);
+    device.gl.readPixels(0, 0, 2, 1, device.gl.RGBA, device.gl.UNSIGNED_BYTE, pixels);
+    EveLensflare.occluderLevels[(EveLensflare.occludedLevelIndex + 1) % EveLensflare.occluderLevels.length].Unset();
+
+    this.occlusionIntensity = 1;
+    for (i = 0; i &lt; EveLensflare.occluderLevels[0].width * 2; i += 4)
+    {
+        this.occlusionIntensity *= pixels[i + 1] ? pixels[i] / pixels[i + 1] : 1;
+    }
+
+    this.backgroundOcclusionIntensity = this.occlusionIntensity;
+    this._occlusionVar.value[0] = this.occlusionIntensity;
+    this._occlusionVar.value[1] = this._occlusionVar.value[0];
+    EveLensflare.occludedLevelIndex = (EveLensflare.occludedLevelIndex + 1) % EveLensflare.occluderLevels.length;
+};
+
+/**
+ * Gets render batches
+ * @param {RenderMode} mode
+ * @param {Tw2BatchAccumulator} accumulator
+ * @param {Tw2PerObjectData} perObjectData
+ */
+EveLensflare.prototype.GetBatches = function(mode, accumulator, perObjectData)
+{
+    if (!this.display)
+    {
+        return;
+    }
+    var viewDir = mat4.multiplyVec4(device.viewInv, quat4.create([0, 0, 1, 0]));
+    if (vec3.dot(viewDir, this._direction) &lt; 0)
+    {
+        return;
+    }
+
+    for (var i = 0; i &lt; this.flares.length; ++i)
+    {
+        this.flares[i].GetBatches(mode, accumulator, perObjectData);
+    }
+    if (this.mesh)
+    {
+        this.mesh.GetBatches(mode, accumulator, perObjectData);
+    }
+};
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="EveBasicPerObjectData.html">EveBasicPerObjectData</a></li><li><a href="EveBasicPerObjectData_SetPerObjectDataToDevice.html">SetPerObjectDataToDevice</a></li><li><a href="EveBoosterBatch.html">EveBoosterBatch</a></li><li><a href="EveBoosterSet.html">EveBoosterSet</a></li><li><a href="EveBoosterSet_Add.html">Add</a></li><li><a href="EveBoosterSet_Update.html">Update</a></li><li><a href="EveChildBillboard.html">EveChildBillboard</a></li><li><a href="EveChildContainer.html">EveChildContainer</a></li><li><a href="EveChildExplosion.html">EveChildExplosion</a></li><li><a href="EveChildMesh.html">EveChildMesh</a></li><li><a href="EveChildParticleSystem.html">EveChildParticleSystem</a></li><li><a href="EveCurveLineSet.html">EveCurveLineSet</a></li><li><a href="EveEffectRoot.html">EveEffectRoot</a></li><li><a href="EveLensflare.html">EveLensflare</a></li><li><a href="EveLocator.html">EveLocator</a></li><li><a href="EveMeshOverlayEffect.html">EveMeshOverlayEffect</a></li><li><a href="EveMissile.html">EveMissile</a></li><li><a href="EveMissileWarhead.html">EveMissileWarhead</a></li><li><a href="EveOccluder.html">EveOccluder</a></li><li><a href="EvePlaneSet.html">EvePlaneSet</a></li><li><a href="EvePlaneSet_Render.html">Render</a></li><li><a href="EvePlaneSetBatch.html">EvePlaneSetBatch</a></li><li><a href="EvePlaneSetBatch_Commit.html">Commit</a></li><li><a href="EvePlaneSetItem.html">EvePlaneSetItem</a></li><li><a href="EvePlanet.html">EvePlanet</a></li><li><a href="EvePlanet_GetPlanetResources.html">GetPlanetResources</a></li><li><a href="EveShip.html">EveShip</a></li><li><a href="EveSpaceObject.html">EveSpaceObject</a></li><li><a href="EveSpaceObjectDecal.html">EveSpaceObjectDecal</a></li><li><a href="EveSpaceScene.html">EveSpaceScene</a></li><li><a href="EveSpotlightSet.html">EveSpotlightSet</a></li><li><a href="EveSpotlightSetBatch.html">EveSpotlightSetBatch</a></li><li><a href="EveSpotlightSetItem.html">EveSpotlightSetItem</a></li><li><a href="EveSpriteSet.html">EveSpriteSet</a></li><li><a href="EveSpriteSet_Add.html">Add</a></li><li><a href="EveSpriteSetBatch.html">EveSpriteSetBatch</a></li><li><a href="EveSpriteSetItem.html">EveSpriteSetItem</a></li><li><a href="EveStretch.html">EveStretch</a></li><li><a href="EveTransform.html">EveTransform</a></li><li><a href="EveTurretData.html">EveTurretData</a></li><li><a href="EveTurretSet.html">EveTurretSet</a></li><li><a href="EveTurretSet_UpdateViewDependentData.html">UpdateViewDependentData</a></li><li><a href="Tr2ParticleElement.html">Tr2ParticleElement</a></li><li><a href="Tw2Animation.html">Tw2Animation</a></li><li><a href="Tw2AnimationController_GetAnimation.html">GetAnimation</a></li><li><a href="Tw2AnimationController_GetPlayingAnimations.html">GetPlayingAnimations</a></li><li><a href="Tw2AnimationController_ResetAnimation.html">ResetAnimation</a></li><li><a href="Tw2BatchAccumulator.html">Tw2BatchAccumulator</a></li><li><a href="Tw2BinaryReader.html">Tw2BinaryReader</a></li><li><a href="Tw2BlendShapeData.html">Tw2BlendShapeData</a></li><li><a href="Tw2Bone.html">Tw2Bone</a></li><li><a href="Tw2ColorCurve.html">Tw2ColorCurve</a></li><li><a href="Tw2ColorCurve2.html">Tw2ColorCurve2</a></li><li><a href="Tw2ColorKey.html">Tw2ColorKey</a></li><li><a href="Tw2ColorKey2.html">Tw2ColorKey2</a></li><li><a href="Tw2ColorSequencer.html">Tw2ColorSequencer</a></li><li><a href="Tw2CurveSet.html">Tw2CurveSet</a></li><li><a href="Tw2Device.html">Tw2Device</a></li><li><a href="Tw2Device_SetStandardStates.html">SetStandardStates</a></li><li><a href="Tw2DynamicEmitter.html">Tw2DynamicEmitter</a></li><li><a href="Tw2Effect.html">Tw2Effect</a></li><li><a href="Tw2EffectRes.html">Tw2EffectRes</a></li><li><a href="Tw2EulerRotation.html">Tw2EulerRotation</a></li><li><a href="Tw2EventCurve.html">Tw2EventCurve</a></li><li><a href="Tw2EventKey.html">Tw2EventKey</a></li><li><a href="Tw2Float.html">Tw2Float</a></li><li><a href="Tw2FloatParameter.html">Tw2FloatParameter</a></li><li><a href="Tw2ForwardingRenderBatch.html">Tw2ForwardingRenderBatch</a></li><li><a href="Tw2Frustum.html">Tw2Frustum</a></li><li><a href="Tw2GeometryAnimation.html">Tw2GeometryAnimation</a></li><li><a href="Tw2GeometryBatch.html">Tw2GeometryBatch</a></li><li><a href="Tw2GeometryBone.html">Tw2GeometryBone</a></li><li><a href="Tw2GeometryCurve.html">Tw2GeometryCurve</a></li><li><a href="Tw2GeometryLineBatch.html">Tw2GeometryLineBatch</a></li><li><a href="Tw2GeometryMesh.html">Tw2GeometryMesh</a></li><li><a href="Tw2GeometryMeshArea.html">Tw2GeometryMeshArea</a></li><li><a href="Tw2GeometryMeshBinding.html">Tw2GeometryMeshBinding</a></li><li><a href="Tw2GeometryModel.html">Tw2GeometryModel</a></li><li><a href="Tw2GeometryModel_FindBoneByName.html">FindBoneByName</a></li><li><a href="Tw2GeometryRes.html">Tw2GeometryRes</a></li><li><a href="Tw2GeometrySkeleton.html">Tw2GeometrySkeleton</a></li><li><a href="Tw2GeometryTrackGroup.html">Tw2GeometryTrackGroup</a></li><li><a href="Tw2GeometryTransformTrack.html">Tw2GeometryTransformTrack</a></li><li><a href="Tw2InstancedMesh.html">Tw2InstancedMesh</a></li><li><a href="Tw2InstancedMeshBatch.html">Tw2InstancedMeshBatch</a></li><li><a href="Tw2LoadingObject.html">Tw2LoadingObject</a></li><li><a href="Tw2MatrixParameter.html">Tw2MatrixParameter</a></li><li><a href="Tw2MayaAnimationEngine.html">Tw2MayaAnimationEngine</a></li><li><a href="Tw2MayaEulerRotationCurve.html">Tw2MayaEulerRotationCurve</a></li><li><a href="Tw2MayaScalarCurve.html">Tw2MayaScalarCurve</a></li><li><a href="Tw2MayaVector3Curve.html">Tw2MayaVector3Curve</a></li><li><a href="Tw2Mesh.html">Tw2Mesh</a></li><li><a href="Tw2MeshArea.html">Tw2MeshArea</a></li><li><a href="Tw2MeshLineArea.html">Tw2MeshLineArea</a></li><li><a href="Tw2Model.html">Tw2Model</a></li><li><a href="Tw2MotherLode.html">Tw2MotherLode</a></li><li><a href="Tw2ObjectReader.html">Tw2ObjectReader</a></li><li><a href="Tw2ParticleAttractorForce.html">Tw2ParticleAttractorForce</a></li><li><a href="Tw2ParticleDirectForce.html">Tw2ParticleDirectForce</a></li><li><a href="Tw2ParticleDragForce.html">Tw2ParticleDragForce</a></li><li><a href="Tw2ParticleElementDeclaration.html">Tw2ParticleElementDeclaration</a></li><li><a href="Tw2ParticleFluidDragForce.html">Tw2ParticleFluidDragForce</a></li><li><a href="Tw2ParticleSpring.html">Tw2ParticleSpring</a></li><li><a href="Tw2ParticleSystem.html">Tw2ParticleSystem</a></li><li><a href="Tw2ParticleSystem_GetInstanceBuffer.html">GetInstanceBuffer</a></li><li><a href="Tw2ParticleTurbulenceForce.html">Tw2ParticleTurbulenceForce</a></li><li><a href="Tw2PerlinCurve.html">Tw2PerlinCurve</a></li><li><a href="Tw2PerObjectData.html">Tw2PerObjectData</a></li><li><a href="Tw2PerObjectData_SetPerObjectDataToDevice.html">SetPerObjectDataToDevice</a></li><li><a href="Tw2PostProcess.html">Tw2PostProcess</a></li><li><a href="Tw2QuaternionCurve.html">Tw2QuaternionCurve</a></li><li><a href="Tw2QuaternionKey.html">Tw2QuaternionKey</a></li><li><a href="Tw2QuaternionKey2.html">Tw2QuaternionKey2</a></li><li><a href="Tw2QuaternionSequencer.html">Tw2QuaternionSequencer</a></li><li><a href="Tw2RandomConstantCurve.html">Tw2RandomConstantCurve</a></li><li><a href="Tw2RandomIntegerAttributeGenerator.html">Tw2RandomIntegerAttributeGenerator</a></li><li><a href="Tw2RandomUniformAttributeGenerator.html">Tw2RandomUniformAttributeGenerator</a></li><li><a href="Tw2RawData.html">Tw2RawData</a></li><li><a href="Tw2RenderBatch.html">Tw2RenderBatch</a></li><li><a href="Tw2RenderTarget.html">Tw2RenderTarget</a></li><li><a href="Tw2ResMan.html">Tw2ResMan</a></li><li><a href="Tw2Resource.html">Tw2Resource</a></li><li><a href="Tw2RGBAScalarSequencer.html">Tw2RGBAScalarSequencer</a></li><li><a href="Tw2RigidOrientation.html">Tw2RigidOrientation</a></li><li><a href="Tw2RotationCurve.html">Tw2RotationCurve</a></li><li><a href="Tw2RuntimeInstanceData.html">Tw2RuntimeInstanceData</a></li><li><a href="Tw2RuntimeInstanceData_SetData.html">SetData</a></li><li><a href="Tw2RuntimeInstanceData_SetItemElement.html">SetItemElement</a></li><li><a href="Tw2RuntimeInstanceData_SetItemElementRef.html">SetItemElementRef</a></li><li><a href="Tw2SamplerOverride.html">Tw2SamplerOverride</a></li><li><a href="Tw2SamplerState.html">Tw2SamplerState</a></li><li><a href="Tw2ScalarCurve.html">Tw2ScalarCurve</a></li><li><a href="Tw2ScalarCurve2.html">Tw2ScalarCurve2</a></li><li><a href="Tw2ScalarKey.html">Tw2ScalarKey</a></li><li><a href="Tw2ScalarKey2.html">Tw2ScalarKey2</a></li><li><a href="Tw2ScalarSequencer.html">Tw2ScalarSequencer</a></li><li><a href="Tw2SineCurve.html">Tw2SineCurve</a></li><li><a href="Tw2SphereShapeAttributeGenerator.html">Tw2SphereShapeAttributeGenerator</a></li><li><a href="Tw2StaticEmitter.html">Tw2StaticEmitter</a></li><li><a href="Tw2TextureParameter.html">Tw2TextureParameter</a></li><li><a href="Tw2TextureParameter_SetTexturePath.html">SetTexturePath</a></li><li><a href="Tw2TextureRes.html">Tw2TextureRes</a></li><li><a href="Tw2TextureRes_Attach.html">Attach</a></li><li><a href="Tw2TextureRes_Bind.html">Bind</a></li><li><a href="Tw2TextureRes_Unload.html">Unload</a></li><li><a href="Tw2Torque.html">Tw2Torque</a></li><li><a href="Tw2Track.html">Tw2Track</a></li><li><a href="Tw2TrackGroup.html">Tw2TrackGroup</a></li><li><a href="Tw2TransformParameter.html">Tw2TransformParameter</a></li><li><a href="Tw2TransformParameter_Apply.html">Apply</a></li><li><a href="Tw2TransformTrack.html">Tw2TransformTrack</a></li><li><a href="Tw2ValueBinding.html">Tw2ValueBinding</a></li><li><a href="Tw2VariableParameter.html">Tw2VariableParameter</a></li><li><a href="Tw2VariableStore.html">Tw2VariableStore</a></li><li><a href="Tw2VariableStore_RegisterType.html">RegisterType</a></li><li><a href="Tw2VariableStore_RegisterVariable.html">RegisterVariable</a></li><li><a href="Tw2VariableStore_RegisterVariableWithType.html">RegisterVariableWithType</a></li><li><a href="Tw2Vector2Curve.html">Tw2Vector2Curve</a></li><li><a href="Tw2Vector2Key.html">Tw2Vector2Key</a></li><li><a href="Tw2Vector2Parameter.html">Tw2Vector2Parameter</a></li><li><a href="Tw2Vector3Curve.html">Tw2Vector3Curve</a></li><li><a href="Tw2Vector3Key.html">Tw2Vector3Key</a></li><li><a href="Tw2Vector3Parameter.html">Tw2Vector3Parameter</a></li><li><a href="Tw2Vector4Parameter.html">Tw2Vector4Parameter</a></li><li><a href="Tw2VectorCurve.html">Tw2VectorCurve</a></li><li><a href="Tw2VectorKey.html">Tw2VectorKey</a></li><li><a href="Tw2VectorSequencer.html">Tw2VectorSequencer</a></li><li><a href="Tw2VertexDeclaration.html">Tw2VertexDeclaration</a></li><li><a href="Tw2VertexElement.html">Tw2VertexElement</a></li><li><a href="Tw2WbgTrack.html">Tw2WbgTrack</a></li><li><a href="Tw2WbgTransformTrack.html">Tw2WbgTransformTrack</a></li><li><a href="Tw2XYZScalarSequencer.html">Tw2XYZScalarSequencer</a></li><li><a href="Tw2YPRSequencer.html">Tw2YPRSequencer</a></li></ul><h3>Global</h3><ul><li><a href="global.html#ag_horner1">ag_horner1</a></li><li><a href="global.html#ag_zeroin">ag_zeroin</a></li><li><a href="global.html#ag_zeroin2">ag_zeroin2</a></li><li><a href="global.html#emitter">emitter</a></li><li><a href="global.html#EveStation">EveStation</a></li><li><a href="global.html#EveTurretSetLocatorInfo">EveTurretSetLocatorInfo</a></li><li><a href="global.html#Inherit">Inherit</a></li><li><a href="global.html#Perlin_init">Perlin_init</a></li><li><a href="global.html#Perlin_noise1">Perlin_noise1</a></li><li><a href="global.html#PerlinNoise1D">PerlinNoise1D</a></li><li><a href="global.html#polyZeroes">polyZeroes</a></li><li><a href="global.html#Tw2AnimationController">Tw2AnimationController</a></li><li><a href="global.html#Tw2EventEmitter">Tw2EventEmitter</a></li><li><a href="global.html#vec3Hermite">vec3Hermite</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 3.4.3</a> on Sun May 07 2017 02:25:29 GMT-0400 (EDT)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

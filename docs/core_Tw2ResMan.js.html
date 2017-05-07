@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: core/Tw2ResMan.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: core/Tw2ResMan.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/**
+ * Manages loaded resources
+ * @property {Object} _loadedObjects
+ * @constructor
+ */
+function Tw2MotherLode()
+{
+    this._loadedObjects = {};
+
+    /**
+     * Finds a loaded object by it's file path
+     * @param {string} path
+     * @returns {Tw2LoadingObject}
+     */
+    this.Find = function(path)
+    {
+        if (path in this._loadedObjects)
+        {
+            return this._loadedObjects[path];
+        }
+        return null;
+    };
+
+    /**
+     * Adds a loaded object
+     * @param {string} path
+     * @param {Tw2LoadingObject} obj
+     */
+    this.Add = function(path, obj)
+    {
+        this._loadedObjects[path] = obj;
+    };
+
+    /**
+     * Removes a loaded object by it's file path
+     * @param {string} path
+     */
+    this.Remove = function(path)
+    {
+        delete this._loadedObjects[path];
+    };
+
+    /**
+     * Clears the loaded object object
+     */
+    this.Clear = function()
+    {
+        this._loadedObjects = {};
+    };
+
+    /**
+     * Unloads all loaded objects and then clears the loadedObject object
+     */
+    this.UnloadAndClear = function()
+    {
+        for (var path in this._loadedObjects)
+        {
+            if (this._loadedObjects.hasOwnProperty(path))
+            {
+                this._loadedObjects[path].Unload();
+            }
+        }
+        this._loadedObjects = {};
+    };
+
+    /**
+     * Purges inactive loaded objects (resources that have been loaded but are not being actively used)
+     * - Loaded objects can flagged with `doNotPurge` to ensure they are never removed
+     * - Resource auto purging can be managed in `ccpwgl` or `ccpwgl_int.resMan` - {@link Tw2ResMan}
+     *     ccpwgl.setResourceUnloadPolicy()
+     *     ccpwgl_int.resMan.autoPurgeResources=true
+     *     ccpwgl_int.resMan.purgeTime=30
+     * @param {Number} curFrame - the current frame count
+     * @param {Number} frameLimit - how many frames the object can stay alive for before being purged
+     * @param {Number} frameDistance - how long the resource has been alive for
+     */
+    this.PurgeInactive = function(curFrame, frameLimit, frameDistance)
+    {
+        for (var path in this._loadedObjects)
+        {
+            if (this._loadedObjects.hasOwnProperty(path))
+            {
+                var obj = this._loadedObjects[path];
+                if (!obj.doNotPurge)
+                {
+                    if (obj._isPurged)
+                    {
+                        emitter.log('res.event',
+                        {
+                            msg: 'Unloaded  ',
+                            path: obj.path,
+                            type: 'purged'
+                        });
+
+                        delete this._loadedObjects[path];
+                    }
+                    if (obj._isGood &amp;&amp; (curFrame - obj.activeFrame) % frameLimit >= frameDistance)
+                    {
+                        if (obj.Unload())
+                        {
+                            emitter.log('res.event',
+                            {
+                                msg: 'Unloaded  ',
+                                path: obj.path,
+                                type: 'unused'
+                            });
+                            delete this._loadedObjects[path];
+                        }
+                    }
+                }
+            }
+        }
+    };
+}
+
+/**
+ * Tw2LoadingObject
+ * @property {object} object
+ * @property {string} _redContents - object's .red file xml contents
+ * @property {Number} _inPrepare
+ * @property {Array.&lt;Object>} _objects
+ * @property {Tw2ObjectReader} _constructor
+ * @property {function} _constructorFunction - The constructor used to create the object once it's red contents have loaded
+ * @inherit Tw2Resource
+ * @constructor
+ */
+function Tw2LoadingObject()
+{
+    this._super.constructor.call(this);
+    this.object = null;
+    this._redContents = null;
+    this._inPrepare = null;
+    this._objects = [];
+    this._constructor = null;
+    this._constructorFunction = null;
+}
+
+/**
+ * AddObject
+ * @param {Object} object
+ * @param {Function} callback
+ * @param {Boolean} initialize
+ * @returns {Boolean}
+ */
+Tw2LoadingObject.prototype.AddObject = function(object, callback, initialize)
+{
+    object._loadCallback = callback;
+    object._initialize = initialize;
+    this._objects.push(object);
+    return false;
+};
+
+/**
+ * Prepare
+ * @param text
+ * @param xml
+ */
+Tw2LoadingObject.prototype.Prepare = function(text, xml)
+{
+    if (text == null)
+    {
+        emitter.log('res.error',
+        {
+            log: 'error',
+            src: ['Tw2LoadingObject', 'Prepare'],
+            msg: 'Invalid XML',
+            path: this.path,
+            type: 'xml.invalid',
+        });
+        this.PrepareFinished(false);
+        return;
+    }
+
+    if (this._inPrepare === null)
+    {
+        this._redContents = text;
+        this._constructor = new Tw2ObjectReader(this._redContents);
+        this._constructorFunction = null;
+        this._inPrepare = 0;
+    }
+
+    while (this._inPrepare &lt; this._objects.length)
+    {
+        try
+        {
+            this._objects[this._inPrepare]._loadCallback(this._constructor.Construct());
+        }
+        catch (e)
+        {
+            emitter.log('res.error',
+            {
+                log: 'error',
+                src: ['Tw2LoadingObject', 'Prepare'],
+                msg: 'Error preparing resource',
+                path: this.path,
+                type: 'prepare',
+                err: e
+            })
+        }
+
+        this._inPrepare++;
+    }
+
+    resMan.motherLode.Remove(this.path);
+
+    emitter.log('res.event',
+    {
+        msg: 'Prepared  ',
+        path: this.path,
+        type: 'prepared'
+    });
+
+    this.PrepareFinished(true);
+};
+
+Inherit(Tw2LoadingObject, Tw2Resource);
+
+/**
+ * Resource Manager
+ * @property {Boolean} systemMirror - Toggles whether {@link GeometryResource} Index and Buffer data arrays are visible
+ * @property {Object.&lt;string, string>} resourcePaths
+ * @property {Object} resourcePaths.res - Default resource path for current ccpwgl version
+ * @property {Object.&lt;string, Function>} _extensions - an object of registered extensions and their constructors
+ * @property {Tw2MotherLode} motherLode
+ * @property {Number} maxPrepareTime
+ * @property {Number} prepareBudget
+ * @property {Array} _prepareQueue
+ * @property {Boolean} autoPurgeResources=true - Sets whether resources should be purged automatically
+ * @property {Number} purgeTime=30 = Sets how long resources can remain inactive before they are purged
+ * @property {Number} activeFrame
+ * @property {Number} _purgeTime
+ * @property {Number} _purgeFrame
+ * @property {Number} _purgeFrameLimit
+ * @property {Number} _pendingLoads - a count of how many things are pending load
+ * @property {Number} _noLoadFrames
+ * @constructor
+ */
+function Tw2ResMan()
+{
+    this.systemMirror = false;
+    this.resourcePaths = {};
+
+    this.resourcePaths['res'] = 'https://developers.eveonline.com/ccpwgl/assetpath/1097993/';
+
+    this._extensions = {};
+    this.motherLode = new Tw2MotherLode();
+    this.maxPrepareTime = 0.05;
+    this.prepareBudget = 0;
+    this._prepareQueue = [];
+    this.autoPurgeResources = true;
+    this.activeFrame = 0;
+    this._purgeTime = 0;
+    this._purgeFrame = 0;
+    this._purgeFrameLimit = 1000;
+    this.purgeTime = 30;
+    this._pendingLoads = 0;
+    this._noLoadFrames = 0;
+
+    /**
+     * IsLoading
+     * @returns {Boolean}
+     *
+     */
+    this.IsLoading = function()
+    {
+        return this._noLoadFrames &lt; 2;
+    };
+
+    /**
+     * Registeres extension's and their constructors
+     * @param {string} extension
+     * @param {Function} constructor
+     */
+    this.RegisterExtension = function(extension, constructor)
+    {
+        this._extensions[extension] = constructor;
+    };
+
+    /**
+     * Creates an Http request
+     * @returns {XMLHttpRequest|ActiveXObject}
+     * @private
+     */
+    this._CreateHttpRequest = function()
+    {
+        var httpRequest = null;
+
+        if (window.XMLHttpRequest)
+        {
+            // Mozilla, Safari, ...
+            httpRequest = new XMLHttpRequest();
+        }
+        else if (window.ActiveXObject)
+        {
+            // IE
+            try
+            {
+                httpRequest = new ActiveXObject('Msxml2.XMLHTTP');
+            }
+            catch (e)
+            {
+                try
+                {
+                    httpRequest = new ActiveXObject('Microsoft.XMLHTTP');
+                }
+                catch (e)
+                {}
+            }
+        }
+
+        if (!httpRequest)
+        {
+            emitter.log('res.error',
+            {
+                log: 'error',
+                src: ['Tw2LoadingObject', 'Prepare'],
+                msg: 'Could not create an XMLHTTP instance',
+                type: 'http.instance'
+            })
+        }
+        return httpRequest;
+    };
+
+    /**
+     * Normalizes a file path by making it lower case and replaces all '\\' with '/'
+     * @param {string} path
+     * @returns {string}
+     * @private
+     */
+    function _NormalizePath(path)
+    {
+        if (path.substr(0, 5) == 'str:/')
+        {
+            return path;
+        }
+        path = path.toLowerCase();
+        path.replace('\\', '/');
+        return path;
+    }
+
+    /**
+     * _GetPathExt
+     * @param path
+     * @returns {string}
+     * @private
+     */
+    function _GetPathExt(path)
+    {
+        if (path.substr(0, 5) == 'str:/')
+        {
+            var slash = path.indexOf('/', 5);
+            if (slash == -1)
+            {
+                return null;
+            }
+            return path.substr(5, slash - 5);
+        }
+        else
+        {
+            var dot = path.lastIndexOf('.');
+            if (dot == -1)
+            {
+                return null;
+            }
+            return path.substr(dot + 1);
+        }
+    }
+
+    /**
+     * Returns a path suitable for logging by truncating really long file names
+     * @param {string} path
+     * @returns {string}
+     */
+    this.LogPathString = function(path)
+    {
+        if (path.substr(0, 5) == 'str:/' &amp;&amp; path.length > 64)
+        {
+            return path.substr(0, 64) + '...';
+        }
+        return path;
+    };
+
+    /**
+     * Internal update function. It is called every frame.
+     * @param {Number} dt - deltaTime
+     * @returns {Boolean}
+     */
+    this.PrepareLoop = function(dt)
+    {
+        if (this._prepareQueue.length == 0 &amp;&amp; this._pendingLoads == 0)
+        {
+            if (this._noLoadFrames &lt; 2)
+            {
+                this._noLoadFrames++;
+            }
+        }
+        else
+        {
+            this._noLoadFrames = 0;
+        }
+
+        resMan.prepareBudget = resMan.maxPrepareTime;
+
+        var now = new Date();
+        var startTime = now.getTime();
+        var preparedCount = 0;
+
+        while (resMan._prepareQueue.length)
+        {
+            try
+            {
+                var result = resMan._prepareQueue[0][0].Prepare(resMan._prepareQueue[0][1], resMan._prepareQueue[0][2]);
+            }
+            catch (e)
+            {
+                resMan._prepareQueue.shift();
+                throw e;
+            }
+            if (!result)
+            {
+                now = new Date();
+
+                emitter.log('res.event',
+                {
+                    msg: 'Prepared  ',
+                    path: resMan._prepareQueue[0][0].path,
+                    time: (now.getTime() - startTime) * 0.001,
+                    type: 'prepared'
+                });
+
+                resMan._prepareQueue.shift();
+                preparedCount++;
+            }
+
+            now = new Date();
+            resMan.prepareBudget -= (now.getTime() - startTime) * 0.001;
+
+            if (resMan.prepareBudget &lt; 0)
+            {
+                break;
+            }
+        }
+
+        this._purgeTime += dt;
+
+        if (this._purgeTime > 1)
+        {
+            this.activeFrame += 1;
+            this._purgeTime -= Math.floor(this._purgeTime);
+            this._purgeFrame += 1;
+
+            if (this._purgeFrame >= 5)
+            {
+                if (this.autoPurgeResources)
+                {
+                    this.motherLode.PurgeInactive(this._purgeFrame, this._purgeFrameLimit, this.purgeTime);
+                }
+            }
+        }
+
+        return true;
+    };
+
+    /**
+     * _DoLoadResource
+     * @param obj
+     * @private
+     */
+    function _DoLoadResource(obj)
+    {
+        return function()
+        {
+            var readyState = 0;
+
+            try
+            {
+                readyState = this.readyState;
+            }
+            catch (e)
+            {
+                emitter.log('res.error',
+                {
+                    log: 'error',
+                    src: ['Tw2ResMan', '_DoLoadResource'],
+                    msg: 'Communication error loading',
+                    path: obj.path,
+                    type: 'http.readystate',
+                    value: readyState
+                });
+
+                obj.LoadFinished(false);
+                resMan._pendingLoads--;
+                return;
+            }
+
+            if (readyState === 4)
+            {
+                if (this.status === 200)
+                {
+                    obj.LoadFinished(true);
+                    var data = null;
+                    var xml = null;
+
+                    try
+                    {
+                        data = this.responseText;
+                        xml = this.responseXML;
+                    }
+                    catch (e)
+                    {
+                        data = this.response;
+                    }
+
+                    resMan._prepareQueue.push([obj, data, xml]);
+                }
+                else
+                {
+                    emitter.log('res.error',
+                    {
+                        log: 'error',
+                        src: ['Tw2ResMan', '_DoLoadResource'],
+                        msg: 'Communication error loading',
+                        path: obj.path,
+                        type: 'http.status',
+                        value: this.status
+                    });
+                    obj.LoadFinished(false);
+                }
+                resMan._pendingLoads--;
+            }
+        };
+    }
+
+    /**
+     * Builds a url from a resource path
+     * - the prefix in the resource path is replaced with it's string value from `this.resourcePaths`
+     * @param {string} resPath
+     * @returns {string}
+     */
+    this.BuildUrl = function(resPath)
+    {
+        var prefixIndex = resPath.indexOf(':/');
+        if (prefixIndex == -1)
+        {
+            emitter.log('res.error',
+            {
+                log: 'warn',
+                src: ['Tw2ResMan', 'BuildUrl'],
+                msg: 'Invalid path',
+                type: 'prefix.undefined',
+                path: resPath
+            });
+            return resPath;
+        }
+
+        var prefix = resPath.substr(0, prefixIndex);
+
+        if (!(prefix in this.resourcePaths))
+        {
+            emitter.log('res.error',
+            {
+                log: 'warn',
+                src: ['Tw2ResMan', 'BuildUrl'],
+                msg: 'Unregistered path',
+                path: resPath,
+                type: 'prefix.unregistered',
+                value: prefix
+            });
+            return resPath;
+        }
+
+        return this.resourcePaths[prefix] + resPath.substr(prefixIndex + 2);
+    };
+
+    /**
+     * _LoadResource
+     * @param obj
+     * @returns {*}
+     * @private
+     */
+    this._LoadResource = function(obj)
+    {
+        obj._isPurged = false;
+        var path = obj.path;
+        this.motherLode.Add(path, obj);
+
+        if (('DoCustomLoad' in obj) &amp;&amp; obj.DoCustomLoad(path))
+        {
+            return obj;
+        }
+
+        var httpRequest = this._CreateHttpRequest();
+        httpRequest.onreadystatechange = _DoLoadResource(obj);
+
+        emitter.log('res.event',
+        {
+            msg: 'Requesting',
+            path: path,
+            type: 'request'
+        });
+
+        httpRequest.open('GET', this.BuildUrl(path));
+
+        if (obj.requestResponseType)
+        {
+            httpRequest.responseType = obj.requestResponseType;
+        }
+
+        obj.LoadStarted();
+
+        try
+        {
+            httpRequest.send();
+            this._pendingLoads++;
+        }
+        catch (e)
+        {
+            emitter.log('res.error',
+            {
+                log: 'error',
+                src: ['Tw2ResMan', '_LoadResource'],
+                msg: 'Error requesting',
+                path: path,
+                type: 'http.request',
+                err: e
+            })
+        }
+    };
+
+    /**
+     * Reloads a specific resource
+     * @param {Tw2LoadingObject} resource
+     * @returns {Tw2LoadingObject} resource
+     */
+    this.ReloadResource = function(resource)
+    {
+        var path = resource.path;
+
+        emitter.log('res.event',
+        {
+            msg: 'Reloading ',
+            path: path,
+            type: 'reload'
+        });
+
+        var obj = this.motherLode.Find(path);
+
+        if (obj !== null &amp;&amp; !obj.IsPurged())
+        {
+            return obj;
+        }
+
+        this._LoadResource(resource);
+        return resource;
+    };
+
+    /**
+     * Gets a resource
+     * @param {String} path
+     * @returns resource
+     */
+    this.GetResource = function(path)
+    {
+        var obj;
+
+        path = _NormalizePath(path);
+        obj = this.motherLode.Find(path);
+
+        if (obj !== null)
+        {
+            if (obj.IsPurged())
+            {
+                obj.Reload();
+            }
+            return obj;
+        }
+
+        var ext = _GetPathExt(path);
+
+        if (ext == null)
+        {
+            emitter.log('res.error',
+            {
+                log: 'error',
+                src: ['Tw2ResMan', 'ReloadResource'],
+                msg: 'Undefined extension',
+                type: 'extension.undefined',
+                path: this.LogPathString(path)
+            });
+            return null;
+        }
+
+        if (!(ext in this._extensions))
+        {
+            emitter.log('res.error',
+            {
+                log: 'error',
+                src: ['Tw2ResMan', 'ReloadResource'],
+                msg: 'Unregistered extension',
+                type: 'extension.unregistered',
+                path: this.LogPathString(path),
+                value: ext
+            });
+            return null;
+        }
+
+        obj = new this._extensions[ext]();
+        obj.path = path;
+        this._LoadResource(obj);
+        return obj;
+    };
+
+    /**
+     * Gets an object (with initialization)
+     * @param {string} path
+     * @param {Function} callback
+     */
+    this.GetObject = function(path, callback)
+    {
+        this._GetObject(path, callback, true);
+    };
+
+    /**
+     * Gets an object (without initialization)
+     * @param {string} path
+     * @param {Function} callback
+     */
+    this.GetObjectNoInitialize = function(path, callback)
+    {
+        this._GetObject(path, callback, false);
+    };
+
+    /**
+     * Core function for managing the processing and loading of an object
+     * @param {string} path
+     * @param {Function} callback
+     * @param {Boolean} initialize
+     * @private
+     */
+    this._GetObject = function(path, callback, initialize)
+    {
+        path = _NormalizePath(path);
+
+        var obj = {};
+        var res = this.motherLode.Find(path);
+
+        if (res !== null)
+        {
+            res.AddObject(obj, callback, initialize);
+            return;
+        }
+
+        res = new Tw2LoadingObject();
+        res.path = path;
+        res.AddObject(obj, callback, initialize);
+
+        this.motherLode.Add(path, res);
+
+        var httpRequest = this._CreateHttpRequest();
+        httpRequest.onreadystatechange = _DoLoadResource(res);
+
+        emitter.log('res.event',
+        {
+            msg: 'Requesting',
+            path: this.BuildUrl(path),
+            _path: path,
+            type: 'requesting'
+        });
+
+        httpRequest.open('GET', this.BuildUrl(path));
+        httpRequest.responseType = 'arraybuffer';
+        res.LoadStarted();
+        obj._objectLoaded = false;
+
+        try
+        {
+            httpRequest.send();
+            this._pendingLoads++;
+        }
+        catch (e)
+        {
+            emitter.log('res.error',
+            {
+                log: 'error',
+                src: ['Tw2ResMan', '_GetObject'],
+                msg: 'Error sending object HTTP request',
+                path: this.BuildUrl(path),
+                _path: path,
+                type: 'http.request',
+                err: e
+            })
+        }
+    };
+
+    /**
+     * Clears the motherLode {@link Tw2MotherLode}
+     */
+    this.Clear = function()
+    {
+        this.motherLode.Clear();
+    };
+
+    /**
+     * Unloads and Clears the motherLode {@link Tw2MotherLode}
+     */
+    this.UnloadAndClear = function()
+    {
+        this.motherLode.UnloadAndClear();
+    }
+}
+
+// Global instance of Tw2ResMan
+var resMan = new Tw2ResMan();
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="EveBasicPerObjectData.html">EveBasicPerObjectData</a></li><li><a href="EveBasicPerObjectData_SetPerObjectDataToDevice.html">SetPerObjectDataToDevice</a></li><li><a href="EveBoosterBatch.html">EveBoosterBatch</a></li><li><a href="EveBoosterSet.html">EveBoosterSet</a></li><li><a href="EveBoosterSet_Add.html">Add</a></li><li><a href="EveBoosterSet_Update.html">Update</a></li><li><a href="EveChildBillboard.html">EveChildBillboard</a></li><li><a href="EveChildContainer.html">EveChildContainer</a></li><li><a href="EveChildExplosion.html">EveChildExplosion</a></li><li><a href="EveChildMesh.html">EveChildMesh</a></li><li><a href="EveChildParticleSystem.html">EveChildParticleSystem</a></li><li><a href="EveCurveLineSet.html">EveCurveLineSet</a></li><li><a href="EveEffectRoot.html">EveEffectRoot</a></li><li><a href="EveLensflare.html">EveLensflare</a></li><li><a href="EveLocator.html">EveLocator</a></li><li><a href="EveMeshOverlayEffect.html">EveMeshOverlayEffect</a></li><li><a href="EveMissile.html">EveMissile</a></li><li><a href="EveMissileWarhead.html">EveMissileWarhead</a></li><li><a href="EveOccluder.html">EveOccluder</a></li><li><a href="EvePlaneSet.html">EvePlaneSet</a></li><li><a href="EvePlaneSet_Render.html">Render</a></li><li><a href="EvePlaneSetBatch.html">EvePlaneSetBatch</a></li><li><a href="EvePlaneSetBatch_Commit.html">Commit</a></li><li><a href="EvePlaneSetItem.html">EvePlaneSetItem</a></li><li><a href="EvePlanet.html">EvePlanet</a></li><li><a href="EvePlanet_GetPlanetResources.html">GetPlanetResources</a></li><li><a href="EveShip.html">EveShip</a></li><li><a href="EveSpaceObject.html">EveSpaceObject</a></li><li><a href="EveSpaceObjectDecal.html">EveSpaceObjectDecal</a></li><li><a href="EveSpaceScene.html">EveSpaceScene</a></li><li><a href="EveSpotlightSet.html">EveSpotlightSet</a></li><li><a href="EveSpotlightSetBatch.html">EveSpotlightSetBatch</a></li><li><a href="EveSpotlightSetItem.html">EveSpotlightSetItem</a></li><li><a href="EveSpriteSet.html">EveSpriteSet</a></li><li><a href="EveSpriteSet_Add.html">Add</a></li><li><a href="EveSpriteSetBatch.html">EveSpriteSetBatch</a></li><li><a href="EveSpriteSetItem.html">EveSpriteSetItem</a></li><li><a href="EveStretch.html">EveStretch</a></li><li><a href="EveTransform.html">EveTransform</a></li><li><a href="EveTurretData.html">EveTurretData</a></li><li><a href="EveTurretSet.html">EveTurretSet</a></li><li><a href="EveTurretSet_UpdateViewDependentData.html">UpdateViewDependentData</a></li><li><a href="Tr2ParticleElement.html">Tr2ParticleElement</a></li><li><a href="Tw2Animation.html">Tw2Animation</a></li><li><a href="Tw2AnimationController_GetAnimation.html">GetAnimation</a></li><li><a href="Tw2AnimationController_GetPlayingAnimations.html">GetPlayingAnimations</a></li><li><a href="Tw2AnimationController_ResetAnimation.html">ResetAnimation</a></li><li><a href="Tw2BatchAccumulator.html">Tw2BatchAccumulator</a></li><li><a href="Tw2BinaryReader.html">Tw2BinaryReader</a></li><li><a href="Tw2BlendShapeData.html">Tw2BlendShapeData</a></li><li><a href="Tw2Bone.html">Tw2Bone</a></li><li><a href="Tw2ColorCurve.html">Tw2ColorCurve</a></li><li><a href="Tw2ColorCurve2.html">Tw2ColorCurve2</a></li><li><a href="Tw2ColorKey.html">Tw2ColorKey</a></li><li><a href="Tw2ColorKey2.html">Tw2ColorKey2</a></li><li><a href="Tw2ColorSequencer.html">Tw2ColorSequencer</a></li><li><a href="Tw2CurveSet.html">Tw2CurveSet</a></li><li><a href="Tw2Device.html">Tw2Device</a></li><li><a href="Tw2Device_SetStandardStates.html">SetStandardStates</a></li><li><a href="Tw2DynamicEmitter.html">Tw2DynamicEmitter</a></li><li><a href="Tw2Effect.html">Tw2Effect</a></li><li><a href="Tw2EffectRes.html">Tw2EffectRes</a></li><li><a href="Tw2EulerRotation.html">Tw2EulerRotation</a></li><li><a href="Tw2EventCurve.html">Tw2EventCurve</a></li><li><a href="Tw2EventKey.html">Tw2EventKey</a></li><li><a href="Tw2Float.html">Tw2Float</a></li><li><a href="Tw2FloatParameter.html">Tw2FloatParameter</a></li><li><a href="Tw2ForwardingRenderBatch.html">Tw2ForwardingRenderBatch</a></li><li><a href="Tw2Frustum.html">Tw2Frustum</a></li><li><a href="Tw2GeometryAnimation.html">Tw2GeometryAnimation</a></li><li><a href="Tw2GeometryBatch.html">Tw2GeometryBatch</a></li><li><a href="Tw2GeometryBone.html">Tw2GeometryBone</a></li><li><a href="Tw2GeometryCurve.html">Tw2GeometryCurve</a></li><li><a href="Tw2GeometryLineBatch.html">Tw2GeometryLineBatch</a></li><li><a href="Tw2GeometryMesh.html">Tw2GeometryMesh</a></li><li><a href="Tw2GeometryMeshArea.html">Tw2GeometryMeshArea</a></li><li><a href="Tw2GeometryMeshBinding.html">Tw2GeometryMeshBinding</a></li><li><a href="Tw2GeometryModel.html">Tw2GeometryModel</a></li><li><a href="Tw2GeometryModel_FindBoneByName.html">FindBoneByName</a></li><li><a href="Tw2GeometryRes.html">Tw2GeometryRes</a></li><li><a href="Tw2GeometrySkeleton.html">Tw2GeometrySkeleton</a></li><li><a href="Tw2GeometryTrackGroup.html">Tw2GeometryTrackGroup</a></li><li><a href="Tw2GeometryTransformTrack.html">Tw2GeometryTransformTrack</a></li><li><a href="Tw2InstancedMesh.html">Tw2InstancedMesh</a></li><li><a href="Tw2InstancedMeshBatch.html">Tw2InstancedMeshBatch</a></li><li><a href="Tw2LoadingObject.html">Tw2LoadingObject</a></li><li><a href="Tw2MatrixParameter.html">Tw2MatrixParameter</a></li><li><a href="Tw2MayaAnimationEngine.html">Tw2MayaAnimationEngine</a></li><li><a href="Tw2MayaEulerRotationCurve.html">Tw2MayaEulerRotationCurve</a></li><li><a href="Tw2MayaScalarCurve.html">Tw2MayaScalarCurve</a></li><li><a href="Tw2MayaVector3Curve.html">Tw2MayaVector3Curve</a></li><li><a href="Tw2Mesh.html">Tw2Mesh</a></li><li><a href="Tw2MeshArea.html">Tw2MeshArea</a></li><li><a href="Tw2MeshLineArea.html">Tw2MeshLineArea</a></li><li><a href="Tw2Model.html">Tw2Model</a></li><li><a href="Tw2MotherLode.html">Tw2MotherLode</a></li><li><a href="Tw2ObjectReader.html">Tw2ObjectReader</a></li><li><a href="Tw2ParticleAttractorForce.html">Tw2ParticleAttractorForce</a></li><li><a href="Tw2ParticleDirectForce.html">Tw2ParticleDirectForce</a></li><li><a href="Tw2ParticleDragForce.html">Tw2ParticleDragForce</a></li><li><a href="Tw2ParticleElementDeclaration.html">Tw2ParticleElementDeclaration</a></li><li><a href="Tw2ParticleFluidDragForce.html">Tw2ParticleFluidDragForce</a></li><li><a href="Tw2ParticleSpring.html">Tw2ParticleSpring</a></li><li><a href="Tw2ParticleSystem.html">Tw2ParticleSystem</a></li><li><a href="Tw2ParticleSystem_GetInstanceBuffer.html">GetInstanceBuffer</a></li><li><a href="Tw2ParticleTurbulenceForce.html">Tw2ParticleTurbulenceForce</a></li><li><a href="Tw2PerlinCurve.html">Tw2PerlinCurve</a></li><li><a href="Tw2PerObjectData.html">Tw2PerObjectData</a></li><li><a href="Tw2PerObjectData_SetPerObjectDataToDevice.html">SetPerObjectDataToDevice</a></li><li><a href="Tw2PostProcess.html">Tw2PostProcess</a></li><li><a href="Tw2QuaternionCurve.html">Tw2QuaternionCurve</a></li><li><a href="Tw2QuaternionKey.html">Tw2QuaternionKey</a></li><li><a href="Tw2QuaternionKey2.html">Tw2QuaternionKey2</a></li><li><a href="Tw2QuaternionSequencer.html">Tw2QuaternionSequencer</a></li><li><a href="Tw2RandomConstantCurve.html">Tw2RandomConstantCurve</a></li><li><a href="Tw2RandomIntegerAttributeGenerator.html">Tw2RandomIntegerAttributeGenerator</a></li><li><a href="Tw2RandomUniformAttributeGenerator.html">Tw2RandomUniformAttributeGenerator</a></li><li><a href="Tw2RawData.html">Tw2RawData</a></li><li><a href="Tw2RenderBatch.html">Tw2RenderBatch</a></li><li><a href="Tw2RenderTarget.html">Tw2RenderTarget</a></li><li><a href="Tw2ResMan.html">Tw2ResMan</a></li><li><a href="Tw2Resource.html">Tw2Resource</a></li><li><a href="Tw2RGBAScalarSequencer.html">Tw2RGBAScalarSequencer</a></li><li><a href="Tw2RigidOrientation.html">Tw2RigidOrientation</a></li><li><a href="Tw2RotationCurve.html">Tw2RotationCurve</a></li><li><a href="Tw2RuntimeInstanceData.html">Tw2RuntimeInstanceData</a></li><li><a href="Tw2RuntimeInstanceData_SetData.html">SetData</a></li><li><a href="Tw2RuntimeInstanceData_SetItemElement.html">SetItemElement</a></li><li><a href="Tw2RuntimeInstanceData_SetItemElementRef.html">SetItemElementRef</a></li><li><a href="Tw2SamplerOverride.html">Tw2SamplerOverride</a></li><li><a href="Tw2SamplerState.html">Tw2SamplerState</a></li><li><a href="Tw2ScalarCurve.html">Tw2ScalarCurve</a></li><li><a href="Tw2ScalarCurve2.html">Tw2ScalarCurve2</a></li><li><a href="Tw2ScalarKey.html">Tw2ScalarKey</a></li><li><a href="Tw2ScalarKey2.html">Tw2ScalarKey2</a></li><li><a href="Tw2ScalarSequencer.html">Tw2ScalarSequencer</a></li><li><a href="Tw2SineCurve.html">Tw2SineCurve</a></li><li><a href="Tw2SphereShapeAttributeGenerator.html">Tw2SphereShapeAttributeGenerator</a></li><li><a href="Tw2StaticEmitter.html">Tw2StaticEmitter</a></li><li><a href="Tw2TextureParameter.html">Tw2TextureParameter</a></li><li><a href="Tw2TextureParameter_SetTexturePath.html">SetTexturePath</a></li><li><a href="Tw2TextureRes.html">Tw2TextureRes</a></li><li><a href="Tw2TextureRes_Attach.html">Attach</a></li><li><a href="Tw2TextureRes_Bind.html">Bind</a></li><li><a href="Tw2TextureRes_Unload.html">Unload</a></li><li><a href="Tw2Torque.html">Tw2Torque</a></li><li><a href="Tw2Track.html">Tw2Track</a></li><li><a href="Tw2TrackGroup.html">Tw2TrackGroup</a></li><li><a href="Tw2TransformParameter.html">Tw2TransformParameter</a></li><li><a href="Tw2TransformParameter_Apply.html">Apply</a></li><li><a href="Tw2TransformTrack.html">Tw2TransformTrack</a></li><li><a href="Tw2ValueBinding.html">Tw2ValueBinding</a></li><li><a href="Tw2VariableParameter.html">Tw2VariableParameter</a></li><li><a href="Tw2VariableStore.html">Tw2VariableStore</a></li><li><a href="Tw2VariableStore_RegisterType.html">RegisterType</a></li><li><a href="Tw2VariableStore_RegisterVariable.html">RegisterVariable</a></li><li><a href="Tw2VariableStore_RegisterVariableWithType.html">RegisterVariableWithType</a></li><li><a href="Tw2Vector2Curve.html">Tw2Vector2Curve</a></li><li><a href="Tw2Vector2Key.html">Tw2Vector2Key</a></li><li><a href="Tw2Vector2Parameter.html">Tw2Vector2Parameter</a></li><li><a href="Tw2Vector3Curve.html">Tw2Vector3Curve</a></li><li><a href="Tw2Vector3Key.html">Tw2Vector3Key</a></li><li><a href="Tw2Vector3Parameter.html">Tw2Vector3Parameter</a></li><li><a href="Tw2Vector4Parameter.html">Tw2Vector4Parameter</a></li><li><a href="Tw2VectorCurve.html">Tw2VectorCurve</a></li><li><a href="Tw2VectorKey.html">Tw2VectorKey</a></li><li><a href="Tw2VectorSequencer.html">Tw2VectorSequencer</a></li><li><a href="Tw2VertexDeclaration.html">Tw2VertexDeclaration</a></li><li><a href="Tw2VertexElement.html">Tw2VertexElement</a></li><li><a href="Tw2WbgTrack.html">Tw2WbgTrack</a></li><li><a href="Tw2WbgTransformTrack.html">Tw2WbgTransformTrack</a></li><li><a href="Tw2XYZScalarSequencer.html">Tw2XYZScalarSequencer</a></li><li><a href="Tw2YPRSequencer.html">Tw2YPRSequencer</a></li></ul><h3>Global</h3><ul><li><a href="global.html#ag_horner1">ag_horner1</a></li><li><a href="global.html#ag_zeroin">ag_zeroin</a></li><li><a href="global.html#ag_zeroin2">ag_zeroin2</a></li><li><a href="global.html#emitter">emitter</a></li><li><a href="global.html#EveStation">EveStation</a></li><li><a href="global.html#EveTurretSetLocatorInfo">EveTurretSetLocatorInfo</a></li><li><a href="global.html#Inherit">Inherit</a></li><li><a href="global.html#Perlin_init">Perlin_init</a></li><li><a href="global.html#Perlin_noise1">Perlin_noise1</a></li><li><a href="global.html#PerlinNoise1D">PerlinNoise1D</a></li><li><a href="global.html#polyZeroes">polyZeroes</a></li><li><a href="global.html#Tw2AnimationController">Tw2AnimationController</a></li><li><a href="global.html#Tw2EventEmitter">Tw2EventEmitter</a></li><li><a href="global.html#vec3Hermite">vec3Hermite</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 3.4.3</a> on Sun May 07 2017 02:25:29 GMT-0400 (EDT)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: eve/EveSpotlightSet.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: eve/EveSpotlightSet.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/**
+ * Spotlight Item
+ * - If a spotlight's properties are changed, it's parent's RebuildBuffers method must be called to apply these changes
+ *
+ * @property {string} name                  - The spotlight's name
+ * @property {mat4} transform               - The spotlight's transform
+ * @property {quat4} coneColor              - Colour of the spotlight's cone
+ * @property {quat4} spriteColor            - Colour of the spotlight's sprite texture
+ * @property {quat4} flareColor             - Colour of the spotlight's flare
+ * @property {quat4} spriteScale            - The size of the spotlight
+ * @property {boolean} boosterGainInfluence - If true, the spotlight can change size on booster gain
+ * @property {number} boneIndex             - The spotlight's bone index
+ * @property {number} groupIndex            - The sof faction group that the spotlight belongs to
+ * @property {number} coneIntensity         - Scales the spotlight's cone colour, set by an object's sof Faction
+ * @property {number} spriteIntensity       - Scales the spotlight's sprite colour, set by an object's sof Faction
+ * @property {number} flareIntensity        - Scales the spotlight's flare colour, set by an object's sof Faction
+ * @constructor
+ */
+function EveSpotlightSetItem()
+{
+    this.display = true;
+    this.name = '';
+    this.transform = mat4.create();
+    this.coneColor = quat4.create();
+    this.spriteColor = quat4.create();
+    this.flareColor = quat4.create();
+    this.spriteScale = vec3.create();
+    this.boosterGainInfluence = false;
+    this.boneIndex = 0;
+    this.groupIndex = -1;
+    this.coneIntensity = 1;
+    this.spriteIntensity = 1;
+    this.flareIntensity = 1;
+}
+
+
+/**
+ * EveSpotlightSet
+ *
+ * @property {string} name                               - The spotlight set's name
+ * @property {boolean} display                           - controls the visibility of the spotlight set, and all it's children
+ * @property {Tw2Effect} coneEffect                      - The spotlight set's cone effect
+ * @property {Tw2Effect} glowEffect                      - The spotlight set's glow effect
+ * @property {Array.&lt;EveSpotlightSetItem) spotlightItems - The spotlight set's children
+ * @property {WebglBuffer} _coneVertexBuffer             - Webgl buffer for the spotlight set's cone vertices
+ * @property {WebglBuffer} _spriteVertexBuffer           - Webgl buffer for the spotlight set's sprite/glow vertices
+ * @property {WebglBuffer} _indexBuffer                  - Webgl buffer for the spotlight set
+ * @property {Tw2VertexDeclaration} _decl                - The spotlight set's vertex declarations
+ * @constructor
+ */
+function EveSpotlightSet()
+{
+    this.name = '';
+    this.display = true;
+    this.coneEffect = null;
+    this.glowEffect = null;
+    this.spotlightItems = [];
+
+    this._coneVertexBuffer = null;
+    this._spriteVertexBuffer = null;
+    this._indexBuffer = null;
+
+    this._decl = new Tw2VertexDeclaration();
+    this._decl.elements.push(new Tw2VertexElement(Tw2VertexDeclaration.DECL_COLOR, 0, device.gl.FLOAT, 4, 0));
+    this._decl.elements.push(new Tw2VertexElement(Tw2VertexDeclaration.DECL_TEXCOORD, 0, device.gl.FLOAT, 4, 16));
+    this._decl.elements.push(new Tw2VertexElement(Tw2VertexDeclaration.DECL_TEXCOORD, 1, device.gl.FLOAT, 4, 32));
+    this._decl.elements.push(new Tw2VertexElement(Tw2VertexDeclaration.DECL_TEXCOORD, 2, device.gl.FLOAT, 4, 48));
+    this._decl.elements.push(new Tw2VertexElement(Tw2VertexDeclaration.DECL_TEXCOORD, 3, device.gl.FLOAT, 3, 64));
+    this._decl.elements.push(new Tw2VertexElement(Tw2VertexDeclaration.DECL_TEXCOORD, 4, device.gl.FLOAT, 3, 76));
+    this._decl.RebuildHash();
+}
+
+/**
+ * Initializes the spotlight set
+ */
+EveSpotlightSet.prototype.Initialize = function()
+{
+    this.RebuildBuffers();
+};
+
+/**
+ * Gets the spotlight set's resources
+ *
+ * @param {Array} [out=[]] - Optional receiving array
+ * @returns {Array.&lt;Tw2EffectRes|Tw2TextureRes|Tw2GeometryRes>} [out]
+ */
+EveSpotlightSet.prototype.GetResources = function(out)
+{
+    if (out === undefined)
+    {
+        out = [];
+    }
+
+    if (this.coneEffect !== null)
+    {
+        this.coneEffect.GetResources(out);
+    }
+
+    if (this.glowEffect !== null)
+    {
+        this.glowEffect.GetResources(out);
+    }
+    return out;
+};
+
+/**
+ * Rebuilds the spotlight set's buffers
+ */
+EveSpotlightSet.prototype.RebuildBuffers = function()
+{
+    var visibleItems = [];
+    for (var i = 0; i &lt; this.spotlightItems.length; i++)
+    {
+        if (this.spotlightItems[i].display)
+        {
+            visibleItems.push(this.spotlightItems[i]);
+        }
+    }
+
+    var itemCount = visibleItems.length;
+    if (itemCount == 0)
+    {
+        return;
+    }
+    var vertCount = 4;
+    var coneQuadCount = 4;
+    var coneVertexCount = itemCount * coneQuadCount * vertCount;
+
+    var vertexSize = 22;
+    var array = new Float32Array(coneVertexCount * vertexSize);
+
+    var indexes = [1, 0, 2, 3];
+
+    for (var i = 0; i &lt; itemCount; ++i)
+    {
+        var item = visibleItems[i];
+        for (var q = 0; q &lt; coneQuadCount; ++q)
+        {
+            for (var v = 0; v &lt; vertCount; ++v)
+            {
+                var offset = (i * coneQuadCount * vertCount + vertCount * q + v) * vertexSize;
+                array[offset + 0] = item.coneColor[0] * item.coneIntensity;
+                array[offset + 1] = item.coneColor[1] * item.coneIntensity;
+                array[offset + 2] = item.coneColor[2] * item.coneIntensity;
+                array[offset + 3] = item.coneColor[3];
+
+                array[offset + 4] = item.transform[0];
+                array[offset + 5] = item.transform[4];
+                array[offset + 6] = item.transform[8];
+                array[offset + 7] = item.transform[12];
+
+                array[offset + 8] = item.transform[1];
+                array[offset + 9] = item.transform[5];
+                array[offset + 10] = item.transform[9];
+                array[offset + 11] = item.transform[13];
+
+                array[offset + 12] = item.transform[2];
+                array[offset + 13] = item.transform[6];
+                array[offset + 14] = item.transform[10];
+                array[offset + 15] = item.transform[14];
+
+                array[offset + 16] = 1;
+                array[offset + 17] = 1;
+                array[offset + 18] = 1;
+
+                array[offset + 19] = q * vertCount + indexes[v];
+                array[offset + 20] = item.boneIndex;
+                array[offset + 21] = item.boosterGainInfluence ? 255 : 0;
+            }
+        }
+    }
+
+    this._coneVertexBuffer = device.gl.createBuffer();
+    device.gl.bindBuffer(device.gl.ARRAY_BUFFER, this._coneVertexBuffer);
+    device.gl.bufferData(device.gl.ARRAY_BUFFER, array, device.gl.STATIC_DRAW);
+    this._coneVertexBuffer.count = itemCount * coneQuadCount * 6;
+
+    var spriteQuadCount = 2;
+    var spriteVertexCount = itemCount * spriteQuadCount * vertCount;
+    array = new Float32Array(spriteVertexCount * vertexSize);
+
+    var indexes = [1, 0, 2, 3];
+
+    for (var i = 0; i &lt; itemCount; ++i)
+    {
+        var item = visibleItems[i];
+        for (var q = 0; q &lt; spriteQuadCount; ++q)
+        {
+            for (var v = 0; v &lt; vertCount; ++v)
+            {
+                var offset = (i * spriteQuadCount * vertCount + vertCount * q + v) * vertexSize;
+                if (q % 2 == 0)
+                {
+                    array[offset + 0] = item.spriteColor[0] * item.spriteIntensity;
+                    array[offset + 1] = item.spriteColor[1] * item.spriteIntensity;
+                    array[offset + 2] = item.spriteColor[2] * item.spriteIntensity;
+                    array[offset + 3] = item.spriteColor[3];
+
+                    array[offset + 16] = item.spriteScale[0];
+                    array[offset + 17] = 1;
+                    array[offset + 18] = 1;
+                }
+                else
+                {
+                    array[offset + 0] = item.flareColor[0] * item.flareIntensity;
+                    array[offset + 1] = item.flareColor[1] * item.flareIntensity;
+                    array[offset + 2] = item.flareColor[2] * item.flareIntensity;
+                    array[offset + 3] = item.flareColor[3];
+
+                    array[offset + 16] = 1;
+                    array[offset + 17] = item.spriteScale[1];
+                    array[offset + 18] = item.spriteScale[2];
+                }
+
+                array[offset + 4] = item.transform[0];
+                array[offset + 5] = item.transform[4];
+                array[offset + 6] = item.transform[8];
+                array[offset + 7] = item.transform[12];
+
+                array[offset + 8] = item.transform[1];
+                array[offset + 9] = item.transform[5];
+                array[offset + 10] = item.transform[9];
+                array[offset + 11] = item.transform[13];
+
+                array[offset + 12] = item.transform[2];
+                array[offset + 13] = item.transform[6];
+                array[offset + 14] = item.transform[10];
+                array[offset + 15] = item.transform[14];
+
+                array[offset + 19] = q * vertCount + indexes[v];
+                array[offset + 20] = item.boneIndex;
+                array[offset + 21] = item.boosterGainInfluence ? 255 : 0;
+            }
+        }
+    }
+
+    this._spriteVertexBuffer = device.gl.createBuffer();
+    device.gl.bindBuffer(device.gl.ARRAY_BUFFER, this._spriteVertexBuffer);
+    device.gl.bufferData(device.gl.ARRAY_BUFFER, array, device.gl.STATIC_DRAW);
+    this._spriteVertexBuffer.count = itemCount * spriteQuadCount * 6;
+
+    var indexes = new Uint16Array(itemCount * coneQuadCount * 6);
+    for (var i = 0; i &lt; itemCount * coneQuadCount; ++i)
+    {
+        var offset = i * 6;
+        var vtxOffset = i * 4;
+        indexes[offset] = vtxOffset;
+        indexes[offset + 1] = vtxOffset + 1;
+        indexes[offset + 2] = vtxOffset + 2;
+        indexes[offset + 3] = vtxOffset + 2;
+        indexes[offset + 4] = vtxOffset + 3;
+        indexes[offset + 5] = vtxOffset + 0;
+    }
+    this._indexBuffer = device.gl.createBuffer();
+    device.gl.bindBuffer(device.gl.ELEMENT_ARRAY_BUFFER, this._indexBuffer);
+    device.gl.bufferData(device.gl.ELEMENT_ARRAY_BUFFER, indexes, device.gl.STATIC_DRAW);
+    device.gl.bindBuffer(device.gl.ELEMENT_ARRAY_BUFFER, null);
+};
+
+/**
+ * EveSpotlightSetBatch
+ *
+ * @inherits Tw2RenderBatch
+ * @constructor
+ */
+function EveSpotlightSetBatch()
+{
+    this._super.constructor.call(this);
+    this.spotlightSet = null;
+}
+
+/**
+ * Commits the spotlight set for rendering
+ *
+ * @param {Tw2Effect} overrideEffect
+ */
+EveSpotlightSetBatch.prototype.Commit = function(overrideEffect)
+{
+    this.spotlightSet.RenderCones(overrideEffect);
+    this.spotlightSet.RenderGlow(overrideEffect);
+};
+
+Inherit(EveSpotlightSetBatch, Tw2RenderBatch);
+
+/**
+ * Gets the spotlight set's render batches
+ *
+ * @param {RenderMode} mode
+ * @param {Tw2BatchAccumulator} accumulator
+ * @param {Tw2PerObjectData} perObjectData
+ */
+EveSpotlightSet.prototype.GetBatches = function(mode, accumulator, perObjectData)
+{
+    if (this.display &amp;&amp; mode == device.RM_ADDITIVE)
+    {
+        var batch = new EveSpotlightSetBatch();
+        batch.renderMode = device.RM_ADDITIVE;
+        batch.spotlightSet = this;
+        batch.perObjectData = perObjectData;
+        accumulator.Commit(batch);
+    }
+};
+
+/**
+ * Renders the spotlight set's cone effect
+ *
+ * @param {Tw2Effect} [overrideEffect] - An optional Tw2Effect which can be passed to override the current cone effect
+ */
+EveSpotlightSet.prototype.RenderCones = function(overrideEffect)
+{
+    var effect = (!overrideEffect) ? this.coneEffect : overrideEffect;
+    this._Render(effect, this._coneVertexBuffer);
+};
+
+/**
+ * Renders the spotlight set's glow effect
+ *
+ * @param {Tw2Effect} overrideEffect - An optional Tw2Effect which can be passed to override the current glow effect
+ */
+EveSpotlightSet.prototype.RenderGlow = function(overrideEffect)
+{
+    var effect = (!overrideEffect) ? this.glowEffect : overrideEffect;
+    this._Render(effect, this._spriteVertexBuffer);
+};
+
+/**
+ * Internal render function
+ *
+ * @param {Tw2Effect} effect   - The Tw2Effect to render
+ * @param {WebglBuffer} buffer - A webgl buffer (ie. cone or glow buffer)
+ * @private
+ */
+EveSpotlightSet.prototype._Render = function(effect, buffer)
+{
+    if (!effect || !buffer || !this._indexBuffer)
+    {
+        return;
+    }
+    var effectRes = effect.GetEffectRes();
+    if (!effectRes.IsGood())
+    {
+        return;
+    }
+
+    device.SetStandardStates(device.RM_ADDITIVE);
+
+    device.gl.bindBuffer(device.gl.ARRAY_BUFFER, buffer);
+    var stride = 22 * 4;
+    device.gl.bindBuffer(device.gl.ELEMENT_ARRAY_BUFFER, this._indexBuffer);
+
+    for (var pass = 0; pass &lt; effect.GetPassCount(); ++pass)
+    {
+        effect.ApplyPass(pass);
+        if (!this._decl.SetDeclaration(effect.GetPassInput(pass), stride))
+        {
+            return;
+        }
+        device.ApplyShadowState();
+        device.gl.drawElements(device.gl.TRIANGLES, buffer.count, device.gl.UNSIGNED_SHORT, 0);
+    }
+};
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="EveBasicPerObjectData.html">EveBasicPerObjectData</a></li><li><a href="EveBasicPerObjectData_SetPerObjectDataToDevice.html">SetPerObjectDataToDevice</a></li><li><a href="EveBoosterBatch.html">EveBoosterBatch</a></li><li><a href="EveBoosterSet.html">EveBoosterSet</a></li><li><a href="EveBoosterSet_Add.html">Add</a></li><li><a href="EveBoosterSet_Update.html">Update</a></li><li><a href="EveChildBillboard.html">EveChildBillboard</a></li><li><a href="EveChildContainer.html">EveChildContainer</a></li><li><a href="EveChildExplosion.html">EveChildExplosion</a></li><li><a href="EveChildMesh.html">EveChildMesh</a></li><li><a href="EveChildParticleSystem.html">EveChildParticleSystem</a></li><li><a href="EveCurveLineSet.html">EveCurveLineSet</a></li><li><a href="EveEffectRoot.html">EveEffectRoot</a></li><li><a href="EveLensflare.html">EveLensflare</a></li><li><a href="EveLocator.html">EveLocator</a></li><li><a href="EveMeshOverlayEffect.html">EveMeshOverlayEffect</a></li><li><a href="EveMissile.html">EveMissile</a></li><li><a href="EveMissileWarhead.html">EveMissileWarhead</a></li><li><a href="EveOccluder.html">EveOccluder</a></li><li><a href="EvePlaneSet.html">EvePlaneSet</a></li><li><a href="EvePlaneSet_Render.html">Render</a></li><li><a href="EvePlaneSetBatch.html">EvePlaneSetBatch</a></li><li><a href="EvePlaneSetBatch_Commit.html">Commit</a></li><li><a href="EvePlaneSetItem.html">EvePlaneSetItem</a></li><li><a href="EvePlanet.html">EvePlanet</a></li><li><a href="EvePlanet_GetPlanetResources.html">GetPlanetResources</a></li><li><a href="EveShip.html">EveShip</a></li><li><a href="EveSpaceObject.html">EveSpaceObject</a></li><li><a href="EveSpaceObjectDecal.html">EveSpaceObjectDecal</a></li><li><a href="EveSpaceScene.html">EveSpaceScene</a></li><li><a href="EveSpotlightSet.html">EveSpotlightSet</a></li><li><a href="EveSpotlightSetBatch.html">EveSpotlightSetBatch</a></li><li><a href="EveSpotlightSetItem.html">EveSpotlightSetItem</a></li><li><a href="EveSpriteSet.html">EveSpriteSet</a></li><li><a href="EveSpriteSet_Add.html">Add</a></li><li><a href="EveSpriteSetBatch.html">EveSpriteSetBatch</a></li><li><a href="EveSpriteSetItem.html">EveSpriteSetItem</a></li><li><a href="EveStretch.html">EveStretch</a></li><li><a href="EveTransform.html">EveTransform</a></li><li><a href="EveTurretData.html">EveTurretData</a></li><li><a href="EveTurretSet.html">EveTurretSet</a></li><li><a href="EveTurretSet_UpdateViewDependentData.html">UpdateViewDependentData</a></li><li><a href="Tr2ParticleElement.html">Tr2ParticleElement</a></li><li><a href="Tw2Animation.html">Tw2Animation</a></li><li><a href="Tw2AnimationController_GetAnimation.html">GetAnimation</a></li><li><a href="Tw2AnimationController_GetPlayingAnimations.html">GetPlayingAnimations</a></li><li><a href="Tw2AnimationController_ResetAnimation.html">ResetAnimation</a></li><li><a href="Tw2BatchAccumulator.html">Tw2BatchAccumulator</a></li><li><a href="Tw2BinaryReader.html">Tw2BinaryReader</a></li><li><a href="Tw2BlendShapeData.html">Tw2BlendShapeData</a></li><li><a href="Tw2Bone.html">Tw2Bone</a></li><li><a href="Tw2ColorCurve.html">Tw2ColorCurve</a></li><li><a href="Tw2ColorCurve2.html">Tw2ColorCurve2</a></li><li><a href="Tw2ColorKey.html">Tw2ColorKey</a></li><li><a href="Tw2ColorKey2.html">Tw2ColorKey2</a></li><li><a href="Tw2ColorSequencer.html">Tw2ColorSequencer</a></li><li><a href="Tw2CurveSet.html">Tw2CurveSet</a></li><li><a href="Tw2Device.html">Tw2Device</a></li><li><a href="Tw2Device_SetStandardStates.html">SetStandardStates</a></li><li><a href="Tw2DynamicEmitter.html">Tw2DynamicEmitter</a></li><li><a href="Tw2Effect.html">Tw2Effect</a></li><li><a href="Tw2EffectRes.html">Tw2EffectRes</a></li><li><a href="Tw2EulerRotation.html">Tw2EulerRotation</a></li><li><a href="Tw2EventCurve.html">Tw2EventCurve</a></li><li><a href="Tw2EventKey.html">Tw2EventKey</a></li><li><a href="Tw2Float.html">Tw2Float</a></li><li><a href="Tw2FloatParameter.html">Tw2FloatParameter</a></li><li><a href="Tw2ForwardingRenderBatch.html">Tw2ForwardingRenderBatch</a></li><li><a href="Tw2Frustum.html">Tw2Frustum</a></li><li><a href="Tw2GeometryAnimation.html">Tw2GeometryAnimation</a></li><li><a href="Tw2GeometryBatch.html">Tw2GeometryBatch</a></li><li><a href="Tw2GeometryBone.html">Tw2GeometryBone</a></li><li><a href="Tw2GeometryCurve.html">Tw2GeometryCurve</a></li><li><a href="Tw2GeometryLineBatch.html">Tw2GeometryLineBatch</a></li><li><a href="Tw2GeometryMesh.html">Tw2GeometryMesh</a></li><li><a href="Tw2GeometryMeshArea.html">Tw2GeometryMeshArea</a></li><li><a href="Tw2GeometryMeshBinding.html">Tw2GeometryMeshBinding</a></li><li><a href="Tw2GeometryModel.html">Tw2GeometryModel</a></li><li><a href="Tw2GeometryModel_FindBoneByName.html">FindBoneByName</a></li><li><a href="Tw2GeometryRes.html">Tw2GeometryRes</a></li><li><a href="Tw2GeometrySkeleton.html">Tw2GeometrySkeleton</a></li><li><a href="Tw2GeometryTrackGroup.html">Tw2GeometryTrackGroup</a></li><li><a href="Tw2GeometryTransformTrack.html">Tw2GeometryTransformTrack</a></li><li><a href="Tw2InstancedMesh.html">Tw2InstancedMesh</a></li><li><a href="Tw2InstancedMeshBatch.html">Tw2InstancedMeshBatch</a></li><li><a href="Tw2LoadingObject.html">Tw2LoadingObject</a></li><li><a href="Tw2MatrixParameter.html">Tw2MatrixParameter</a></li><li><a href="Tw2MayaAnimationEngine.html">Tw2MayaAnimationEngine</a></li><li><a href="Tw2MayaEulerRotationCurve.html">Tw2MayaEulerRotationCurve</a></li><li><a href="Tw2MayaScalarCurve.html">Tw2MayaScalarCurve</a></li><li><a href="Tw2MayaVector3Curve.html">Tw2MayaVector3Curve</a></li><li><a href="Tw2Mesh.html">Tw2Mesh</a></li><li><a href="Tw2MeshArea.html">Tw2MeshArea</a></li><li><a href="Tw2MeshLineArea.html">Tw2MeshLineArea</a></li><li><a href="Tw2Model.html">Tw2Model</a></li><li><a href="Tw2MotherLode.html">Tw2MotherLode</a></li><li><a href="Tw2ObjectReader.html">Tw2ObjectReader</a></li><li><a href="Tw2ParticleAttractorForce.html">Tw2ParticleAttractorForce</a></li><li><a href="Tw2ParticleDirectForce.html">Tw2ParticleDirectForce</a></li><li><a href="Tw2ParticleDragForce.html">Tw2ParticleDragForce</a></li><li><a href="Tw2ParticleElementDeclaration.html">Tw2ParticleElementDeclaration</a></li><li><a href="Tw2ParticleFluidDragForce.html">Tw2ParticleFluidDragForce</a></li><li><a href="Tw2ParticleSpring.html">Tw2ParticleSpring</a></li><li><a href="Tw2ParticleSystem.html">Tw2ParticleSystem</a></li><li><a href="Tw2ParticleSystem_GetInstanceBuffer.html">GetInstanceBuffer</a></li><li><a href="Tw2ParticleTurbulenceForce.html">Tw2ParticleTurbulenceForce</a></li><li><a href="Tw2PerlinCurve.html">Tw2PerlinCurve</a></li><li><a href="Tw2PerObjectData.html">Tw2PerObjectData</a></li><li><a href="Tw2PerObjectData_SetPerObjectDataToDevice.html">SetPerObjectDataToDevice</a></li><li><a href="Tw2PostProcess.html">Tw2PostProcess</a></li><li><a href="Tw2QuaternionCurve.html">Tw2QuaternionCurve</a></li><li><a href="Tw2QuaternionKey.html">Tw2QuaternionKey</a></li><li><a href="Tw2QuaternionKey2.html">Tw2QuaternionKey2</a></li><li><a href="Tw2QuaternionSequencer.html">Tw2QuaternionSequencer</a></li><li><a href="Tw2RandomConstantCurve.html">Tw2RandomConstantCurve</a></li><li><a href="Tw2RandomIntegerAttributeGenerator.html">Tw2RandomIntegerAttributeGenerator</a></li><li><a href="Tw2RandomUniformAttributeGenerator.html">Tw2RandomUniformAttributeGenerator</a></li><li><a href="Tw2RawData.html">Tw2RawData</a></li><li><a href="Tw2RenderBatch.html">Tw2RenderBatch</a></li><li><a href="Tw2RenderTarget.html">Tw2RenderTarget</a></li><li><a href="Tw2ResMan.html">Tw2ResMan</a></li><li><a href="Tw2Resource.html">Tw2Resource</a></li><li><a href="Tw2RGBAScalarSequencer.html">Tw2RGBAScalarSequencer</a></li><li><a href="Tw2RigidOrientation.html">Tw2RigidOrientation</a></li><li><a href="Tw2RotationCurve.html">Tw2RotationCurve</a></li><li><a href="Tw2RuntimeInstanceData.html">Tw2RuntimeInstanceData</a></li><li><a href="Tw2RuntimeInstanceData_SetData.html">SetData</a></li><li><a href="Tw2RuntimeInstanceData_SetItemElement.html">SetItemElement</a></li><li><a href="Tw2RuntimeInstanceData_SetItemElementRef.html">SetItemElementRef</a></li><li><a href="Tw2SamplerOverride.html">Tw2SamplerOverride</a></li><li><a href="Tw2SamplerState.html">Tw2SamplerState</a></li><li><a href="Tw2ScalarCurve.html">Tw2ScalarCurve</a></li><li><a href="Tw2ScalarCurve2.html">Tw2ScalarCurve2</a></li><li><a href="Tw2ScalarKey.html">Tw2ScalarKey</a></li><li><a href="Tw2ScalarKey2.html">Tw2ScalarKey2</a></li><li><a href="Tw2ScalarSequencer.html">Tw2ScalarSequencer</a></li><li><a href="Tw2SineCurve.html">Tw2SineCurve</a></li><li><a href="Tw2SphereShapeAttributeGenerator.html">Tw2SphereShapeAttributeGenerator</a></li><li><a href="Tw2StaticEmitter.html">Tw2StaticEmitter</a></li><li><a href="Tw2TextureParameter.html">Tw2TextureParameter</a></li><li><a href="Tw2TextureParameter_SetTexturePath.html">SetTexturePath</a></li><li><a href="Tw2TextureRes.html">Tw2TextureRes</a></li><li><a href="Tw2TextureRes_Attach.html">Attach</a></li><li><a href="Tw2TextureRes_Bind.html">Bind</a></li><li><a href="Tw2TextureRes_Unload.html">Unload</a></li><li><a href="Tw2Torque.html">Tw2Torque</a></li><li><a href="Tw2Track.html">Tw2Track</a></li><li><a href="Tw2TrackGroup.html">Tw2TrackGroup</a></li><li><a href="Tw2TransformParameter.html">Tw2TransformParameter</a></li><li><a href="Tw2TransformParameter_Apply.html">Apply</a></li><li><a href="Tw2TransformTrack.html">Tw2TransformTrack</a></li><li><a href="Tw2ValueBinding.html">Tw2ValueBinding</a></li><li><a href="Tw2VariableParameter.html">Tw2VariableParameter</a></li><li><a href="Tw2VariableStore.html">Tw2VariableStore</a></li><li><a href="Tw2VariableStore_RegisterType.html">RegisterType</a></li><li><a href="Tw2VariableStore_RegisterVariable.html">RegisterVariable</a></li><li><a href="Tw2VariableStore_RegisterVariableWithType.html">RegisterVariableWithType</a></li><li><a href="Tw2Vector2Curve.html">Tw2Vector2Curve</a></li><li><a href="Tw2Vector2Key.html">Tw2Vector2Key</a></li><li><a href="Tw2Vector2Parameter.html">Tw2Vector2Parameter</a></li><li><a href="Tw2Vector3Curve.html">Tw2Vector3Curve</a></li><li><a href="Tw2Vector3Key.html">Tw2Vector3Key</a></li><li><a href="Tw2Vector3Parameter.html">Tw2Vector3Parameter</a></li><li><a href="Tw2Vector4Parameter.html">Tw2Vector4Parameter</a></li><li><a href="Tw2VectorCurve.html">Tw2VectorCurve</a></li><li><a href="Tw2VectorKey.html">Tw2VectorKey</a></li><li><a href="Tw2VectorSequencer.html">Tw2VectorSequencer</a></li><li><a href="Tw2VertexDeclaration.html">Tw2VertexDeclaration</a></li><li><a href="Tw2VertexElement.html">Tw2VertexElement</a></li><li><a href="Tw2WbgTrack.html">Tw2WbgTrack</a></li><li><a href="Tw2WbgTransformTrack.html">Tw2WbgTransformTrack</a></li><li><a href="Tw2XYZScalarSequencer.html">Tw2XYZScalarSequencer</a></li><li><a href="Tw2YPRSequencer.html">Tw2YPRSequencer</a></li></ul><h3>Global</h3><ul><li><a href="global.html#ag_horner1">ag_horner1</a></li><li><a href="global.html#ag_zeroin">ag_zeroin</a></li><li><a href="global.html#ag_zeroin2">ag_zeroin2</a></li><li><a href="global.html#emitter">emitter</a></li><li><a href="global.html#EveStation">EveStation</a></li><li><a href="global.html#EveTurretSetLocatorInfo">EveTurretSetLocatorInfo</a></li><li><a href="global.html#Inherit">Inherit</a></li><li><a href="global.html#Perlin_init">Perlin_init</a></li><li><a href="global.html#Perlin_noise1">Perlin_noise1</a></li><li><a href="global.html#PerlinNoise1D">PerlinNoise1D</a></li><li><a href="global.html#polyZeroes">polyZeroes</a></li><li><a href="global.html#Tw2AnimationController">Tw2AnimationController</a></li><li><a href="global.html#Tw2EventEmitter">Tw2EventEmitter</a></li><li><a href="global.html#vec3Hermite">vec3Hermite</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 3.4.3</a> on Sun May 07 2017 02:25:29 GMT-0400 (EDT)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

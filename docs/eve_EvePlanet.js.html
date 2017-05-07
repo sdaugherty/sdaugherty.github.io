@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: eve/EvePlanet.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: eve/EvePlanet.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/**
+ * EvePlanet
+ * @property {boolean} display
+ * @property {EveTransform} highDetail
+ * @property {Tw2Effect} effectHeight
+ * @property {number} itemID
+ * @property {string} heightMapResPath1
+ * @property {string} heightMapResPath2
+ * @property {Tw2RenderTarget} heightMap
+ * @property {boolean} heightDirty
+ * @property {Array} lockedResources
+ * @property {boolean} zOnlyModel
+ * @property {Array.&lt;Tw2Res>} watchedResources
+ * @constructor
+ */
+function EvePlanet()
+{
+    this.display = true;
+    this.highDetail = new EveTransform();
+    this.effectHeight = new Tw2Effect();
+    this.itemID = 0;
+    this.heightMapResPath1 = '';
+    this.heightMapResPath2 = '';
+    this.heightMap = new Tw2RenderTarget();
+    this.heightDirty = false;
+    this.lockedResources = [];
+    this.zOnlyModel = null;
+    this.watchedResources = [];
+}
+
+/**
+ * Gets planet res objects
+ * @param {Array} [out=[]] - Optional receiving array
+ * @returns {Array.&lt;Tw2EffectRes|Tw2TextureRes|Tw2GeometryRes>} [out]
+ */
+EvePlanet.prototype.GetResources = function(out)
+{
+    if (out === undefined)
+    {
+        out = [];
+    }
+
+    this.highDetail.GetResources(out);
+    this.effectHeight.GetResources(out);
+
+    return out;
+}
+
+/**
+ * Creates the planet
+ * @param {number} itemID - the item id is used for randomization
+ * @param {string} planetPath - .red file for a planet, or planet template
+ * @param {string} [atmospherePath] - optional .red file for a planet's atmosphere
+ * @param {string} heightMap1
+ * @param {string} heightMap2
+ */
+EvePlanet.prototype.Create = function(itemID, planetPath, atmospherePath, heightMap1, heightMap2)
+{
+    this.itemID = itemID;
+    this.heightMapResPath1 = heightMap1;
+    this.heightMapResPath2 = heightMap2;
+    this.highDetail.children = [];
+    var self = this;
+
+    resMan.GetObject(planetPath, function(obj)
+    {
+        self.highDetail.children.unshift(obj);
+        self._MeshLoaded();
+    });
+
+    if (atmospherePath)
+    {
+        resMan.GetObject(atmospherePath, function(obj)
+        {
+            self.highDetail.children.push(obj);
+        });
+    }
+    this.heightDirty = true;
+    resMan.GetObject('res:/dx9/model/worldobject/planet/planetzonly.red', function(obj)
+    {
+        self.zOnlyModel = obj;
+    })
+};
+
+/**
+ * GetPlanetResources
+ * @param obj
+ * @param visited
+ * @param result
+ * @constructor
+ */
+EvePlanet.prototype.GetPlanetResources = function(obj, visited, result)
+{
+    if (visited.indexOf(obj) != -1)
+    {
+        return;
+    }
+    visited.push(obj);
+    if (obj &amp;&amp; typeof(obj['doNotPurge']) != typeof(undefined))
+    {
+        result.push(obj);
+        return;
+    }
+    for (var prop in obj)
+    {
+        if (obj.hasOwnProperty(prop))
+        {
+            if (typeof(obj[prop]) == "object")
+            {
+                this.GetPlanetResources(obj[prop], visited, result);
+            }
+        }
+    }
+};
+
+/**
+ * Internal helper function that fires when the planet's mesh has loaded
+ * @private
+ */
+EvePlanet.prototype._MeshLoaded = function()
+{
+    this.lockedResources = [];
+    this.GetPlanetResources(this.highDetail, [], this.lockedResources);
+
+    var mainMesh = this.highDetail.children[0].mesh;
+    var originalEffect = null;
+    var resPath;
+    if (mainMesh.transparentAreas.length)
+    {
+        originalEffect = mainMesh.transparentAreas[0].effect;
+        resPath = originalEffect.effectFilePath;
+    }
+    else if (mainMesh.opaqueAreas.length)
+    {
+        originalEffect = mainMesh.opaqueAreas[0].effect;
+        resPath = originalEffect.effectFilePath;
+    }
+    else
+    {
+        resPath = "res:/Graphics/Effect/Managed/Space/Planet/EarthlikePlanet.fx";
+    }
+    resPath = resPath.replace('.fx', 'BlitHeight.fx');
+    this.watchedResources = [];
+
+    for (var param in originalEffect.parameters)
+    {
+        this.effectHeight.parameters[param] = originalEffect.parameters[param];
+        if ('textureRes' in originalEffect.parameters[param])
+        {
+            this.watchedResources.push(originalEffect.parameters[param].textureRes);
+        }
+    }
+    for (var i = 0; i &lt; this.highDetail.children[0].children.length; ++i)
+    {
+        mainMesh = this.highDetail.children[0].children[i].mesh;
+        if (!mainMesh)
+        {
+            continue;
+        }
+        originalEffect = null;
+        if (mainMesh.transparentAreas.length)
+        {
+            originalEffect = mainMesh.transparentAreas[0].effect;
+        }
+        else if (mainMesh.opaqueAreas.length)
+        {
+            originalEffect = mainMesh.opaqueAreas[0].effect;
+        }
+        else
+        {
+            continue;
+        }
+        for (param in originalEffect.parameters)
+        {
+            if (originalEffect.parameters.hasOwnProperty(param))
+            {
+                this.effectHeight.parameters[param] = originalEffect.parameters[param];
+                if ('textureRes' in originalEffect.parameters[param])
+                {
+                    this.watchedResources.push(originalEffect.parameters[param].textureRes);
+                }
+            }
+        }
+    }
+
+    param = new Tw2TextureParameter();
+    param.name = 'NormalHeight1';
+    param.resourcePath = this.heightMapResPath1;
+    param.Initialize();
+    this.watchedResources.push(param.textureRes);
+    this.lockedResources.push(param.textureRes);
+    this.effectHeight.parameters[param.name] = param;
+    param = new Tw2TextureParameter();
+    param.name = 'NormalHeight2';
+    param.resourcePath = this.heightMapResPath2;
+    param.Initialize();
+    this.lockedResources.push(param.textureRes);
+    this.watchedResources.push(param.textureRes);
+    this.effectHeight.parameters[param.name] = param;
+    param = new Tw2FloatParameter();
+    param.name = 'Random';
+    param.value = this.itemID % 100;
+    this.effectHeight.parameters[param.name] = param;
+    param = new Tw2FloatParameter();
+    param.name = 'TargetTextureHeight';
+    param.value = 1024;
+    this.effectHeight.parameters[param.name] = param;
+
+    this.effectHeight.effectFilePath = resPath;
+    this.effectHeight.Initialize();
+    this.heightDirty = true;
+    this.heightMap.Create(2048, 1024, false);
+    this.watchedResources.push(this.effectHeight.effectRes);
+
+    for (i = 0; i &lt; this.lockedResources.length; ++i)
+    {
+        this.lockedResources[i].doNotPurge++;
+        if (this.lockedResources[i].IsPurged())
+        {
+            this.lockedResources[i].Reload();
+        }
+    }
+};
+
+/**
+ * Gets render batches
+ * @param {RenderMode} mode
+ * @param {Tw2BatchAccumulator} accumulator
+ */
+EvePlanet.prototype.GetBatches = function(mode, accumulator)
+{
+    if (this.display &amp;&amp; this.heightDirty &amp;&amp; this.watchedResources.length &amp;&amp; this.heightMapResPath1 != '')
+    {
+        for (var i = 0; i &lt; this.watchedResources.length; ++i)
+        {
+            if (this.watchedResources[i] &amp;&amp; !this.watchedResources[i].IsGood())
+            {
+                return;
+            }
+        }
+        this.watchedResources = [];
+        this.heightMap.Set();
+        device.SetStandardStates(device.RM_FULLSCREEN);
+        device.gl.clearColor(0.0, 0.0, 0.0, 0.0);
+        device.gl.clear(device.gl.COLOR_BUFFER_BIT);
+        device.RenderFullScreenQuad(this.effectHeight);
+        this.heightMap.Unset();
+        this.heightDirty = false;
+        for (i = 0; i &lt; this.lockedResources.length; ++i)
+        {
+            this.lockedResources[i].doNotPurge--;
+        }
+        var mainMesh = this.highDetail.children[0].mesh;
+        var originalEffect = null;
+        if (mainMesh.transparentAreas.length)
+        {
+            originalEffect = mainMesh.transparentAreas[0].effect;
+        }
+        else if (mainMesh.opaqueAreas.length)
+        {
+            originalEffect = mainMesh.opaqueAreas[0].effect;
+        }
+        if (originalEffect)
+        {
+            originalEffect.parameters['HeightMap'].textureRes = this.heightMap.texture;
+        }
+    }
+
+    if (this.display)
+    {
+        this.highDetail.GetBatches(mode, accumulator);
+    }
+};
+
+/**
+ * Gets z buffer only batches
+ * @param {RenderMode} mode
+ * @param {Tw2BatchAccumulator} accumulator
+ */
+EvePlanet.prototype.GetZOnlyBatches = function(mode, accumulator)
+{
+    if (this.display &amp;&amp; this.zOnlyModel)
+    {
+        this.zOnlyModel.GetBatches(mode, accumulator);
+    }
+};
+
+/**
+ * Per frame update
+ * @param {number} dt - delta time
+ */
+EvePlanet.prototype.Update = function(dt)
+{
+    this.highDetail.Update(dt);
+};
+
+/**
+ * Updates view dependent data
+ * @param {mat4} parentTransform
+ */
+EvePlanet.prototype.UpdateViewDependentData = function(parentTransform)
+{
+    this.highDetail.UpdateViewDependentData(parentTransform);
+    if (this.zOnlyModel)
+    {
+        this.zOnlyModel.translation = this.highDetail.translation;
+        this.zOnlyModel.scaling = this.highDetail.scaling;
+        this.zOnlyModel.UpdateViewDependentData(parentTransform);
+    }
+};
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="EveBasicPerObjectData.html">EveBasicPerObjectData</a></li><li><a href="EveBasicPerObjectData_SetPerObjectDataToDevice.html">SetPerObjectDataToDevice</a></li><li><a href="EveBoosterBatch.html">EveBoosterBatch</a></li><li><a href="EveBoosterSet.html">EveBoosterSet</a></li><li><a href="EveBoosterSet_Add.html">Add</a></li><li><a href="EveBoosterSet_Update.html">Update</a></li><li><a href="EveChildBillboard.html">EveChildBillboard</a></li><li><a href="EveChildContainer.html">EveChildContainer</a></li><li><a href="EveChildExplosion.html">EveChildExplosion</a></li><li><a href="EveChildMesh.html">EveChildMesh</a></li><li><a href="EveChildParticleSystem.html">EveChildParticleSystem</a></li><li><a href="EveCurveLineSet.html">EveCurveLineSet</a></li><li><a href="EveEffectRoot.html">EveEffectRoot</a></li><li><a href="EveLensflare.html">EveLensflare</a></li><li><a href="EveLocator.html">EveLocator</a></li><li><a href="EveMeshOverlayEffect.html">EveMeshOverlayEffect</a></li><li><a href="EveMissile.html">EveMissile</a></li><li><a href="EveMissileWarhead.html">EveMissileWarhead</a></li><li><a href="EveOccluder.html">EveOccluder</a></li><li><a href="EvePlaneSet.html">EvePlaneSet</a></li><li><a href="EvePlaneSet_Render.html">Render</a></li><li><a href="EvePlaneSetBatch.html">EvePlaneSetBatch</a></li><li><a href="EvePlaneSetBatch_Commit.html">Commit</a></li><li><a href="EvePlaneSetItem.html">EvePlaneSetItem</a></li><li><a href="EvePlanet.html">EvePlanet</a></li><li><a href="EvePlanet_GetPlanetResources.html">GetPlanetResources</a></li><li><a href="EveShip.html">EveShip</a></li><li><a href="EveSpaceObject.html">EveSpaceObject</a></li><li><a href="EveSpaceObjectDecal.html">EveSpaceObjectDecal</a></li><li><a href="EveSpaceScene.html">EveSpaceScene</a></li><li><a href="EveSpotlightSet.html">EveSpotlightSet</a></li><li><a href="EveSpotlightSetBatch.html">EveSpotlightSetBatch</a></li><li><a href="EveSpotlightSetItem.html">EveSpotlightSetItem</a></li><li><a href="EveSpriteSet.html">EveSpriteSet</a></li><li><a href="EveSpriteSet_Add.html">Add</a></li><li><a href="EveSpriteSetBatch.html">EveSpriteSetBatch</a></li><li><a href="EveSpriteSetItem.html">EveSpriteSetItem</a></li><li><a href="EveStretch.html">EveStretch</a></li><li><a href="EveTransform.html">EveTransform</a></li><li><a href="EveTurretData.html">EveTurretData</a></li><li><a href="EveTurretSet.html">EveTurretSet</a></li><li><a href="EveTurretSet_UpdateViewDependentData.html">UpdateViewDependentData</a></li><li><a href="Tr2ParticleElement.html">Tr2ParticleElement</a></li><li><a href="Tw2Animation.html">Tw2Animation</a></li><li><a href="Tw2AnimationController_GetAnimation.html">GetAnimation</a></li><li><a href="Tw2AnimationController_GetPlayingAnimations.html">GetPlayingAnimations</a></li><li><a href="Tw2AnimationController_ResetAnimation.html">ResetAnimation</a></li><li><a href="Tw2BatchAccumulator.html">Tw2BatchAccumulator</a></li><li><a href="Tw2BinaryReader.html">Tw2BinaryReader</a></li><li><a href="Tw2BlendShapeData.html">Tw2BlendShapeData</a></li><li><a href="Tw2Bone.html">Tw2Bone</a></li><li><a href="Tw2ColorCurve.html">Tw2ColorCurve</a></li><li><a href="Tw2ColorCurve2.html">Tw2ColorCurve2</a></li><li><a href="Tw2ColorKey.html">Tw2ColorKey</a></li><li><a href="Tw2ColorKey2.html">Tw2ColorKey2</a></li><li><a href="Tw2ColorSequencer.html">Tw2ColorSequencer</a></li><li><a href="Tw2CurveSet.html">Tw2CurveSet</a></li><li><a href="Tw2Device.html">Tw2Device</a></li><li><a href="Tw2Device_SetStandardStates.html">SetStandardStates</a></li><li><a href="Tw2DynamicEmitter.html">Tw2DynamicEmitter</a></li><li><a href="Tw2Effect.html">Tw2Effect</a></li><li><a href="Tw2EffectRes.html">Tw2EffectRes</a></li><li><a href="Tw2EulerRotation.html">Tw2EulerRotation</a></li><li><a href="Tw2EventCurve.html">Tw2EventCurve</a></li><li><a href="Tw2EventKey.html">Tw2EventKey</a></li><li><a href="Tw2Float.html">Tw2Float</a></li><li><a href="Tw2FloatParameter.html">Tw2FloatParameter</a></li><li><a href="Tw2ForwardingRenderBatch.html">Tw2ForwardingRenderBatch</a></li><li><a href="Tw2Frustum.html">Tw2Frustum</a></li><li><a href="Tw2GeometryAnimation.html">Tw2GeometryAnimation</a></li><li><a href="Tw2GeometryBatch.html">Tw2GeometryBatch</a></li><li><a href="Tw2GeometryBone.html">Tw2GeometryBone</a></li><li><a href="Tw2GeometryCurve.html">Tw2GeometryCurve</a></li><li><a href="Tw2GeometryLineBatch.html">Tw2GeometryLineBatch</a></li><li><a href="Tw2GeometryMesh.html">Tw2GeometryMesh</a></li><li><a href="Tw2GeometryMeshArea.html">Tw2GeometryMeshArea</a></li><li><a href="Tw2GeometryMeshBinding.html">Tw2GeometryMeshBinding</a></li><li><a href="Tw2GeometryModel.html">Tw2GeometryModel</a></li><li><a href="Tw2GeometryModel_FindBoneByName.html">FindBoneByName</a></li><li><a href="Tw2GeometryRes.html">Tw2GeometryRes</a></li><li><a href="Tw2GeometrySkeleton.html">Tw2GeometrySkeleton</a></li><li><a href="Tw2GeometryTrackGroup.html">Tw2GeometryTrackGroup</a></li><li><a href="Tw2GeometryTransformTrack.html">Tw2GeometryTransformTrack</a></li><li><a href="Tw2InstancedMesh.html">Tw2InstancedMesh</a></li><li><a href="Tw2InstancedMeshBatch.html">Tw2InstancedMeshBatch</a></li><li><a href="Tw2LoadingObject.html">Tw2LoadingObject</a></li><li><a href="Tw2MatrixParameter.html">Tw2MatrixParameter</a></li><li><a href="Tw2MayaAnimationEngine.html">Tw2MayaAnimationEngine</a></li><li><a href="Tw2MayaEulerRotationCurve.html">Tw2MayaEulerRotationCurve</a></li><li><a href="Tw2MayaScalarCurve.html">Tw2MayaScalarCurve</a></li><li><a href="Tw2MayaVector3Curve.html">Tw2MayaVector3Curve</a></li><li><a href="Tw2Mesh.html">Tw2Mesh</a></li><li><a href="Tw2MeshArea.html">Tw2MeshArea</a></li><li><a href="Tw2MeshLineArea.html">Tw2MeshLineArea</a></li><li><a href="Tw2Model.html">Tw2Model</a></li><li><a href="Tw2MotherLode.html">Tw2MotherLode</a></li><li><a href="Tw2ObjectReader.html">Tw2ObjectReader</a></li><li><a href="Tw2ParticleAttractorForce.html">Tw2ParticleAttractorForce</a></li><li><a href="Tw2ParticleDirectForce.html">Tw2ParticleDirectForce</a></li><li><a href="Tw2ParticleDragForce.html">Tw2ParticleDragForce</a></li><li><a href="Tw2ParticleElementDeclaration.html">Tw2ParticleElementDeclaration</a></li><li><a href="Tw2ParticleFluidDragForce.html">Tw2ParticleFluidDragForce</a></li><li><a href="Tw2ParticleSpring.html">Tw2ParticleSpring</a></li><li><a href="Tw2ParticleSystem.html">Tw2ParticleSystem</a></li><li><a href="Tw2ParticleSystem_GetInstanceBuffer.html">GetInstanceBuffer</a></li><li><a href="Tw2ParticleTurbulenceForce.html">Tw2ParticleTurbulenceForce</a></li><li><a href="Tw2PerlinCurve.html">Tw2PerlinCurve</a></li><li><a href="Tw2PerObjectData.html">Tw2PerObjectData</a></li><li><a href="Tw2PerObjectData_SetPerObjectDataToDevice.html">SetPerObjectDataToDevice</a></li><li><a href="Tw2PostProcess.html">Tw2PostProcess</a></li><li><a href="Tw2QuaternionCurve.html">Tw2QuaternionCurve</a></li><li><a href="Tw2QuaternionKey.html">Tw2QuaternionKey</a></li><li><a href="Tw2QuaternionKey2.html">Tw2QuaternionKey2</a></li><li><a href="Tw2QuaternionSequencer.html">Tw2QuaternionSequencer</a></li><li><a href="Tw2RandomConstantCurve.html">Tw2RandomConstantCurve</a></li><li><a href="Tw2RandomIntegerAttributeGenerator.html">Tw2RandomIntegerAttributeGenerator</a></li><li><a href="Tw2RandomUniformAttributeGenerator.html">Tw2RandomUniformAttributeGenerator</a></li><li><a href="Tw2RawData.html">Tw2RawData</a></li><li><a href="Tw2RenderBatch.html">Tw2RenderBatch</a></li><li><a href="Tw2RenderTarget.html">Tw2RenderTarget</a></li><li><a href="Tw2ResMan.html">Tw2ResMan</a></li><li><a href="Tw2Resource.html">Tw2Resource</a></li><li><a href="Tw2RGBAScalarSequencer.html">Tw2RGBAScalarSequencer</a></li><li><a href="Tw2RigidOrientation.html">Tw2RigidOrientation</a></li><li><a href="Tw2RotationCurve.html">Tw2RotationCurve</a></li><li><a href="Tw2RuntimeInstanceData.html">Tw2RuntimeInstanceData</a></li><li><a href="Tw2RuntimeInstanceData_SetData.html">SetData</a></li><li><a href="Tw2RuntimeInstanceData_SetItemElement.html">SetItemElement</a></li><li><a href="Tw2RuntimeInstanceData_SetItemElementRef.html">SetItemElementRef</a></li><li><a href="Tw2SamplerOverride.html">Tw2SamplerOverride</a></li><li><a href="Tw2SamplerState.html">Tw2SamplerState</a></li><li><a href="Tw2ScalarCurve.html">Tw2ScalarCurve</a></li><li><a href="Tw2ScalarCurve2.html">Tw2ScalarCurve2</a></li><li><a href="Tw2ScalarKey.html">Tw2ScalarKey</a></li><li><a href="Tw2ScalarKey2.html">Tw2ScalarKey2</a></li><li><a href="Tw2ScalarSequencer.html">Tw2ScalarSequencer</a></li><li><a href="Tw2SineCurve.html">Tw2SineCurve</a></li><li><a href="Tw2SphereShapeAttributeGenerator.html">Tw2SphereShapeAttributeGenerator</a></li><li><a href="Tw2StaticEmitter.html">Tw2StaticEmitter</a></li><li><a href="Tw2TextureParameter.html">Tw2TextureParameter</a></li><li><a href="Tw2TextureParameter_SetTexturePath.html">SetTexturePath</a></li><li><a href="Tw2TextureRes.html">Tw2TextureRes</a></li><li><a href="Tw2TextureRes_Attach.html">Attach</a></li><li><a href="Tw2TextureRes_Bind.html">Bind</a></li><li><a href="Tw2TextureRes_Unload.html">Unload</a></li><li><a href="Tw2Torque.html">Tw2Torque</a></li><li><a href="Tw2Track.html">Tw2Track</a></li><li><a href="Tw2TrackGroup.html">Tw2TrackGroup</a></li><li><a href="Tw2TransformParameter.html">Tw2TransformParameter</a></li><li><a href="Tw2TransformParameter_Apply.html">Apply</a></li><li><a href="Tw2TransformTrack.html">Tw2TransformTrack</a></li><li><a href="Tw2ValueBinding.html">Tw2ValueBinding</a></li><li><a href="Tw2VariableParameter.html">Tw2VariableParameter</a></li><li><a href="Tw2VariableStore.html">Tw2VariableStore</a></li><li><a href="Tw2VariableStore_RegisterType.html">RegisterType</a></li><li><a href="Tw2VariableStore_RegisterVariable.html">RegisterVariable</a></li><li><a href="Tw2VariableStore_RegisterVariableWithType.html">RegisterVariableWithType</a></li><li><a href="Tw2Vector2Curve.html">Tw2Vector2Curve</a></li><li><a href="Tw2Vector2Key.html">Tw2Vector2Key</a></li><li><a href="Tw2Vector2Parameter.html">Tw2Vector2Parameter</a></li><li><a href="Tw2Vector3Curve.html">Tw2Vector3Curve</a></li><li><a href="Tw2Vector3Key.html">Tw2Vector3Key</a></li><li><a href="Tw2Vector3Parameter.html">Tw2Vector3Parameter</a></li><li><a href="Tw2Vector4Parameter.html">Tw2Vector4Parameter</a></li><li><a href="Tw2VectorCurve.html">Tw2VectorCurve</a></li><li><a href="Tw2VectorKey.html">Tw2VectorKey</a></li><li><a href="Tw2VectorSequencer.html">Tw2VectorSequencer</a></li><li><a href="Tw2VertexDeclaration.html">Tw2VertexDeclaration</a></li><li><a href="Tw2VertexElement.html">Tw2VertexElement</a></li><li><a href="Tw2WbgTrack.html">Tw2WbgTrack</a></li><li><a href="Tw2WbgTransformTrack.html">Tw2WbgTransformTrack</a></li><li><a href="Tw2XYZScalarSequencer.html">Tw2XYZScalarSequencer</a></li><li><a href="Tw2YPRSequencer.html">Tw2YPRSequencer</a></li></ul><h3>Global</h3><ul><li><a href="global.html#ag_horner1">ag_horner1</a></li><li><a href="global.html#ag_zeroin">ag_zeroin</a></li><li><a href="global.html#ag_zeroin2">ag_zeroin2</a></li><li><a href="global.html#emitter">emitter</a></li><li><a href="global.html#EveStation">EveStation</a></li><li><a href="global.html#EveTurretSetLocatorInfo">EveTurretSetLocatorInfo</a></li><li><a href="global.html#Inherit">Inherit</a></li><li><a href="global.html#Perlin_init">Perlin_init</a></li><li><a href="global.html#Perlin_noise1">Perlin_noise1</a></li><li><a href="global.html#PerlinNoise1D">PerlinNoise1D</a></li><li><a href="global.html#polyZeroes">polyZeroes</a></li><li><a href="global.html#Tw2AnimationController">Tw2AnimationController</a></li><li><a href="global.html#Tw2EventEmitter">Tw2EventEmitter</a></li><li><a href="global.html#vec3Hermite">vec3Hermite</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 3.4.3</a> on Sun May 07 2017 02:25:29 GMT-0400 (EDT)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: eve/EveBoosterSet.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: eve/EveBoosterSet.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/**
+ * EveObjectSet
+ * @typedef {EveBoosterSet|EvePlaneSet|EveSpotlightSet|EveTurretSet|EveSpaceObjectDecal} EveObjectSet
+ */
+
+/**
+ * EveBoosterSet
+ * @property {boolean} display
+ * @property {Tw2Effect} effect
+ * @property {Tw2Effect} glows
+ * @property {number} glowScale
+ * @property {quat4} glowColor
+ * @property {quat4} warpGlowColor
+ * @property {number} symHaloScale
+ * @property {number} haloScaleX
+ * @property {number} haloScaleY
+ * @property {number} maxVel
+ * @property {quat4} haloColor
+ * @property {boolean} alwaysOn
+ * @property {mat4} _parentTransform
+ * @property {mat4} _wavePhase
+ * @property {Array.&lt;{}>} _boosterTransforms
+ * @property {WebGlBuffer} _positions
+ * @property {Tw2VertexDeclaration} _decl
+ * @property {Tw2PerObjectData} _perObjectData
+ * @property {boolean} rebuildPending
+ * @constructor
+ */
+function EveBoosterSet()
+{
+    this.display = true;
+    this.effect = null;
+    this.glows = null;
+    this.glowScale = 1.0;
+    this.glowColor = quat4.create();
+    this.warpGlowColor = quat4.create();
+    this.symHaloScale = 1.0;
+    this.haloScaleX = 1.0;
+    this.haloScaleY = 1.0;
+    this.maxVel = 250;
+    this.haloColor = quat4.create();
+    this.alwaysOn = true;
+
+    this._parentTransform = mat4.create();
+    this._wavePhase = mat4.create();
+    this._boosterTransforms = [];
+
+    this._positions = device.gl.createBuffer();
+
+    this._decl = new Tw2VertexDeclaration();
+    this._decl.elements.push(new Tw2VertexElement(Tw2VertexDeclaration.DECL_POSITION, 0, device.gl.FLOAT, 3, 0));
+    this._decl.elements.push(new Tw2VertexElement(Tw2VertexDeclaration.DECL_TEXCOORD, 0, device.gl.FLOAT, 2, 12));
+    this._decl.elements.push(new Tw2VertexElement(Tw2VertexDeclaration.DECL_TEXCOORD, 1, device.gl.FLOAT, 4, 20));
+    this._decl.elements.push(new Tw2VertexElement(Tw2VertexDeclaration.DECL_TEXCOORD, 2, device.gl.FLOAT, 4, 36));
+    this._decl.elements.push(new Tw2VertexElement(Tw2VertexDeclaration.DECL_TEXCOORD, 3, device.gl.FLOAT, 4, 52));
+    this._decl.elements.push(new Tw2VertexElement(Tw2VertexDeclaration.DECL_TEXCOORD, 4, device.gl.FLOAT, 4, 68));
+    this._decl.elements.push(new Tw2VertexElement(Tw2VertexDeclaration.DECL_TEXCOORD, 5, device.gl.FLOAT, 4, 84));
+    this._decl.elements.push(new Tw2VertexElement(Tw2VertexDeclaration.DECL_TEXCOORD, 6, device.gl.FLOAT, 1, 100));
+    this._decl.elements.push(new Tw2VertexElement(Tw2VertexDeclaration.DECL_TEXCOORD, 7, device.gl.FLOAT, 2, 104));
+    this._decl.RebuildHash();
+
+    this._perObjectData = new Tw2PerObjectData();
+    this._perObjectData.perObjectVSData = new Tw2RawData();
+    this._perObjectData.perObjectVSData.Declare('WorldMat', 16);
+    this._perObjectData.perObjectVSData.Declare('Shipdata', 4);
+    this._perObjectData.perObjectVSData.Create();
+
+    this.rebuildPending = false;
+}
+
+/**
+ * Initializes the booster set
+ */
+EveBoosterSet.prototype.Initialize = function()
+{
+    this.rebuildPending = true;
+};
+
+/**
+ * Gets booster set res objects
+ * @param {Array} [out=[]] - Optional receiving array
+ * @returns {Array.&lt;Tw2EffectRes|Tw2TextureRes>} [out]
+ */
+EveBoosterSet.prototype.GetResources = function(out)
+{
+    if (out === undefined)
+    {
+        out = [];
+    }
+
+    if (this.effect !== null)
+    {
+        this.effect.GetResources(out);
+    }
+
+    if (this.glows !== null &amp;&amp; this.glows.effect !== null)
+    {
+        this.glows.effect.GetResources(out);
+    }
+
+    return out;
+}
+
+/**
+ * Clears the booster set
+ */
+EveBoosterSet.prototype.Clear = function()
+{
+    this._boosterTransforms = [];
+    this._wavePhase = mat4.create();
+    if (this.glows)
+    {
+        this.glows.Clear();
+    }
+};
+
+/**
+ * Adds a booster
+ * @param {mat4} localMatrix
+ * @param {number} atlas0
+ * @param {number} atlas1
+ * @constructor
+ */
+EveBoosterSet.prototype.Add = function(localMatrix, atlas0, atlas1)
+{
+    var transform = mat4.create();
+    mat4.set(localMatrix, transform);
+    this._boosterTransforms[this._boosterTransforms.length] = {
+        transform: transform,
+        atlas0: atlas0,
+        atlas1: atlas1
+    };
+    this._wavePhase[this._wavePhase.length] = Math.random();
+    if (this.glows)
+    {
+        var pos = vec3.create([localMatrix[12], localMatrix[13], localMatrix[14]]);
+        var dir = vec3.create([localMatrix[8], localMatrix[9], localMatrix[10]]);
+        var scale = Math.max(vec3.length([localMatrix[0], localMatrix[1], localMatrix[2]]), vec3.length([localMatrix[4], localMatrix[5], localMatrix[6]]));
+        vec3.normalize(dir);
+        if (scale &lt; 3)
+        {
+            vec3.scale(dir, scale / 3);
+        }
+        var seed = Math.random() * 0.7;
+        var spritePos = vec3.create();
+        vec3.subtract(pos, vec3.scale(dir, 2.5, spritePos), spritePos);
+        this.glows.Add(spritePos, seed, seed, scale * this.glowScale, scale * this.glowScale, 0, this.glowColor, this.warpGlowColor);
+        vec3.subtract(pos, vec3.scale(dir, 3, spritePos), spritePos);
+        this.glows.Add(spritePos, seed, 1 + seed, scale * this.symHaloScale, scale * this.symHaloScale, 0, this.haloColor, this.warpGlowColor);
+        vec3.subtract(pos, vec3.scale(dir, 3.01, spritePos), spritePos);
+        this.glows.Add(spritePos, seed, 1 + seed, scale * this.haloScaleX, scale * this.haloScaleY, 0, this.haloColor, this.warpGlowColor);
+    }
+};
+
+/**
+ * Internal helper
+ * @type {Array}
+ * @private
+ */
+EveBoosterSet._box = [
+    [
+        [-1.0, -1.0, 0.0],
+        [1.0, -1.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [-1.0, 1.0, 0.0]
+    ],
+
+    [
+        [-1.0, -1.0, -1.0],
+        [-1.0, 1.0, -1.0],
+        [1.0, 1.0, -1.0],
+        [1.0, -1.0, -1.0]
+    ],
+
+    [
+        [-1.0, -1.0, 0.0],
+        [-1.0, 1.0, 0.0],
+        [-1.0, 1.0, -1.0],
+        [-1.0, -1.0, -1.0]
+    ],
+
+    [
+        [1.0, -1.0, 0.0],
+        [1.0, -1.0, -1.0],
+        [1.0, 1.0, -1.0],
+        [1.0, 1.0, 0.0]
+    ],
+
+    [
+        [-1.0, -1.0, 0.0],
+        [-1.0, -1.0, -1.0],
+        [1.0, -1.0, -1.0],
+        [1.0, -1.0, 0.0]
+    ],
+
+    [
+        [-1.0, 1.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [1.0, 1.0, -1.0],
+        [-1.0, 1.0, -1.0]
+    ]
+];
+
+/**
+ * Rebuilds the boosters
+ */
+EveBoosterSet.prototype.Rebuild = function()
+{
+    var data = new Float32Array(this._boosterTransforms.length * EveBoosterSet._box.length * 6 * 28);
+    var order = [0, 3, 1, 3, 2, 1];
+    var index = 0;
+    for (var booster = 0; booster &lt; this._boosterTransforms.length; ++booster)
+    {
+        for (var i = 0; i &lt; EveBoosterSet._box.length; ++i)
+        {
+            for (var j = 0; j &lt; order.length; ++j)
+            {
+                data[index++] = EveBoosterSet._box[i][order[j]][0];
+                data[index++] = EveBoosterSet._box[i][order[j]][1];
+                data[index++] = EveBoosterSet._box[i][order[j]][2];
+                data[index++] = 0;
+                data[index++] = 0;
+                data.set(this._boosterTransforms[booster].transform, index);
+                index += 16;
+                data[index++] = 0;
+                data[index++] = 1;
+                data[index++] = 1;
+                data[index++] = 1;
+                data[index++] = this._wavePhase[booster];
+                data[index++] = this._boosterTransforms[booster].atlas0;
+                data[index++] = this._boosterTransforms[booster].atlas1;
+            }
+        }
+    }
+    device.gl.bindBuffer(device.gl.ARRAY_BUFFER, this._positions);
+    device.gl.bufferData(device.gl.ARRAY_BUFFER, data, device.gl.STATIC_DRAW);
+
+    this.rebuildPending = false;
+    if (this.glows)
+    {
+        this.glows.RebuildBuffers();
+    }
+};
+
+/**
+ * Per frame update
+ * @param {number} dt - DeltaTime
+ * @param {mat4} parentMatrix
+ * @constructor
+ */
+EveBoosterSet.prototype.Update = function(dt, parentMatrix)
+{
+    if (this.glows)
+    {
+        this.glows.Update(dt);
+    }
+    this._parentTransform = parentMatrix;
+};
+
+
+/**
+ * Booster render batch
+ * @constructor
+ */
+function EveBoosterBatch()
+{
+    this.renderMode = device.RM_ANY;
+    this.perObjectData = null;
+    this.boosters = null;
+}
+
+/**
+ * Commits the batch
+ * @param {Tw2Effect} [overrideEffect]
+ */
+EveBoosterBatch.prototype.Commit = function(overrideEffect)
+{
+    this.boosters.Render(overrideEffect);
+};
+
+/**
+ * Gets render batches
+ * @param {RenderMode} mode
+ * @param {Tw2BatchAccumulator} accumulator
+ * @param {Tw2PerObjectData} perObjectData
+ */
+EveBoosterSet.prototype.GetBatches = function(mode, accumulator, perObjectData)
+{
+    if (!this.display || mode != device.RM_ADDITIVE)
+    {
+        return;
+    }
+    if (this.effect &amp;&amp; this._boosterTransforms.length)
+    {
+        var batch = new EveBoosterBatch();
+
+        mat4.transpose(this._parentTransform, this._perObjectData.perObjectVSData.Get('WorldMat'));
+        this._perObjectData.perObjectVSData.Set('Shipdata', perObjectData.perObjectVSData.Get('Shipdata'));
+        this._perObjectData.perObjectPSData = perObjectData.perObjectPSData;
+        batch.perObjectData = this._perObjectData;
+        batch.boosters = this;
+        batch.renderMode = device.RM_ADDITIVE;
+        accumulator.Commit(batch);
+    }
+    if (this.glows)
+    {
+        this.glows.GetBoosterGlowBatches(mode, accumulator, perObjectData, this._parentTransform, perObjectData.perObjectVSData.Get('Shipdata')[0], 0);
+    }
+};
+
+/**
+ * Renders the accumulated batches
+ * @param {Tw2Effect} [overrideEffect]
+ * @returns {boolean}
+ */
+EveBoosterSet.prototype.Render = function(overrideEffect)
+{
+    var effect = typeof(overrideEffect) == 'undefined' ? this.effect : overrideEffect;
+    var effectRes = effect.GetEffectRes();
+    if (!effectRes.IsGood())
+    {
+        return false;
+    }
+
+    device.gl.bindBuffer(device.gl.ARRAY_BUFFER, this._positions);
+
+    for (var pass = 0; pass &lt; effect.GetPassCount(); ++pass)
+    {
+        effect.ApplyPass(pass);
+        if (!this._decl.SetDeclaration(effect.GetPassInput(pass), 112))
+        {
+            return false;
+        }
+        device.ApplyShadowState();
+        device.gl.drawArrays(device.gl.TRIANGLES, 0, this._boosterTransforms.length * 12 * 3);
+    }
+    return true;
+};
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="EveBasicPerObjectData.html">EveBasicPerObjectData</a></li><li><a href="EveBasicPerObjectData_SetPerObjectDataToDevice.html">SetPerObjectDataToDevice</a></li><li><a href="EveBoosterBatch.html">EveBoosterBatch</a></li><li><a href="EveBoosterSet.html">EveBoosterSet</a></li><li><a href="EveBoosterSet_Add.html">Add</a></li><li><a href="EveBoosterSet_Update.html">Update</a></li><li><a href="EveChildBillboard.html">EveChildBillboard</a></li><li><a href="EveChildContainer.html">EveChildContainer</a></li><li><a href="EveChildExplosion.html">EveChildExplosion</a></li><li><a href="EveChildMesh.html">EveChildMesh</a></li><li><a href="EveChildParticleSystem.html">EveChildParticleSystem</a></li><li><a href="EveCurveLineSet.html">EveCurveLineSet</a></li><li><a href="EveEffectRoot.html">EveEffectRoot</a></li><li><a href="EveLensflare.html">EveLensflare</a></li><li><a href="EveLocator.html">EveLocator</a></li><li><a href="EveMeshOverlayEffect.html">EveMeshOverlayEffect</a></li><li><a href="EveMissile.html">EveMissile</a></li><li><a href="EveMissileWarhead.html">EveMissileWarhead</a></li><li><a href="EveOccluder.html">EveOccluder</a></li><li><a href="EvePlaneSet.html">EvePlaneSet</a></li><li><a href="EvePlaneSet_Render.html">Render</a></li><li><a href="EvePlaneSetBatch.html">EvePlaneSetBatch</a></li><li><a href="EvePlaneSetBatch_Commit.html">Commit</a></li><li><a href="EvePlaneSetItem.html">EvePlaneSetItem</a></li><li><a href="EvePlanet.html">EvePlanet</a></li><li><a href="EvePlanet_GetPlanetResources.html">GetPlanetResources</a></li><li><a href="EveShip.html">EveShip</a></li><li><a href="EveSpaceObject.html">EveSpaceObject</a></li><li><a href="EveSpaceObjectDecal.html">EveSpaceObjectDecal</a></li><li><a href="EveSpaceScene.html">EveSpaceScene</a></li><li><a href="EveSpotlightSet.html">EveSpotlightSet</a></li><li><a href="EveSpotlightSetBatch.html">EveSpotlightSetBatch</a></li><li><a href="EveSpotlightSetItem.html">EveSpotlightSetItem</a></li><li><a href="EveSpriteSet.html">EveSpriteSet</a></li><li><a href="EveSpriteSet_Add.html">Add</a></li><li><a href="EveSpriteSetBatch.html">EveSpriteSetBatch</a></li><li><a href="EveSpriteSetItem.html">EveSpriteSetItem</a></li><li><a href="EveStretch.html">EveStretch</a></li><li><a href="EveTransform.html">EveTransform</a></li><li><a href="EveTurretData.html">EveTurretData</a></li><li><a href="EveTurretSet.html">EveTurretSet</a></li><li><a href="EveTurretSet_UpdateViewDependentData.html">UpdateViewDependentData</a></li><li><a href="Tr2ParticleElement.html">Tr2ParticleElement</a></li><li><a href="Tw2Animation.html">Tw2Animation</a></li><li><a href="Tw2AnimationController_GetAnimation.html">GetAnimation</a></li><li><a href="Tw2AnimationController_GetPlayingAnimations.html">GetPlayingAnimations</a></li><li><a href="Tw2AnimationController_ResetAnimation.html">ResetAnimation</a></li><li><a href="Tw2BatchAccumulator.html">Tw2BatchAccumulator</a></li><li><a href="Tw2BinaryReader.html">Tw2BinaryReader</a></li><li><a href="Tw2BlendShapeData.html">Tw2BlendShapeData</a></li><li><a href="Tw2Bone.html">Tw2Bone</a></li><li><a href="Tw2ColorCurve.html">Tw2ColorCurve</a></li><li><a href="Tw2ColorCurve2.html">Tw2ColorCurve2</a></li><li><a href="Tw2ColorKey.html">Tw2ColorKey</a></li><li><a href="Tw2ColorKey2.html">Tw2ColorKey2</a></li><li><a href="Tw2ColorSequencer.html">Tw2ColorSequencer</a></li><li><a href="Tw2CurveSet.html">Tw2CurveSet</a></li><li><a href="Tw2Device.html">Tw2Device</a></li><li><a href="Tw2Device_SetStandardStates.html">SetStandardStates</a></li><li><a href="Tw2DynamicEmitter.html">Tw2DynamicEmitter</a></li><li><a href="Tw2Effect.html">Tw2Effect</a></li><li><a href="Tw2EffectRes.html">Tw2EffectRes</a></li><li><a href="Tw2EulerRotation.html">Tw2EulerRotation</a></li><li><a href="Tw2EventCurve.html">Tw2EventCurve</a></li><li><a href="Tw2EventKey.html">Tw2EventKey</a></li><li><a href="Tw2Float.html">Tw2Float</a></li><li><a href="Tw2FloatParameter.html">Tw2FloatParameter</a></li><li><a href="Tw2ForwardingRenderBatch.html">Tw2ForwardingRenderBatch</a></li><li><a href="Tw2Frustum.html">Tw2Frustum</a></li><li><a href="Tw2GeometryAnimation.html">Tw2GeometryAnimation</a></li><li><a href="Tw2GeometryBatch.html">Tw2GeometryBatch</a></li><li><a href="Tw2GeometryBone.html">Tw2GeometryBone</a></li><li><a href="Tw2GeometryCurve.html">Tw2GeometryCurve</a></li><li><a href="Tw2GeometryLineBatch.html">Tw2GeometryLineBatch</a></li><li><a href="Tw2GeometryMesh.html">Tw2GeometryMesh</a></li><li><a href="Tw2GeometryMeshArea.html">Tw2GeometryMeshArea</a></li><li><a href="Tw2GeometryMeshBinding.html">Tw2GeometryMeshBinding</a></li><li><a href="Tw2GeometryModel.html">Tw2GeometryModel</a></li><li><a href="Tw2GeometryModel_FindBoneByName.html">FindBoneByName</a></li><li><a href="Tw2GeometryRes.html">Tw2GeometryRes</a></li><li><a href="Tw2GeometrySkeleton.html">Tw2GeometrySkeleton</a></li><li><a href="Tw2GeometryTrackGroup.html">Tw2GeometryTrackGroup</a></li><li><a href="Tw2GeometryTransformTrack.html">Tw2GeometryTransformTrack</a></li><li><a href="Tw2InstancedMesh.html">Tw2InstancedMesh</a></li><li><a href="Tw2InstancedMeshBatch.html">Tw2InstancedMeshBatch</a></li><li><a href="Tw2LoadingObject.html">Tw2LoadingObject</a></li><li><a href="Tw2MatrixParameter.html">Tw2MatrixParameter</a></li><li><a href="Tw2MayaAnimationEngine.html">Tw2MayaAnimationEngine</a></li><li><a href="Tw2MayaEulerRotationCurve.html">Tw2MayaEulerRotationCurve</a></li><li><a href="Tw2MayaScalarCurve.html">Tw2MayaScalarCurve</a></li><li><a href="Tw2MayaVector3Curve.html">Tw2MayaVector3Curve</a></li><li><a href="Tw2Mesh.html">Tw2Mesh</a></li><li><a href="Tw2MeshArea.html">Tw2MeshArea</a></li><li><a href="Tw2MeshLineArea.html">Tw2MeshLineArea</a></li><li><a href="Tw2Model.html">Tw2Model</a></li><li><a href="Tw2MotherLode.html">Tw2MotherLode</a></li><li><a href="Tw2ObjectReader.html">Tw2ObjectReader</a></li><li><a href="Tw2ParticleAttractorForce.html">Tw2ParticleAttractorForce</a></li><li><a href="Tw2ParticleDirectForce.html">Tw2ParticleDirectForce</a></li><li><a href="Tw2ParticleDragForce.html">Tw2ParticleDragForce</a></li><li><a href="Tw2ParticleElementDeclaration.html">Tw2ParticleElementDeclaration</a></li><li><a href="Tw2ParticleFluidDragForce.html">Tw2ParticleFluidDragForce</a></li><li><a href="Tw2ParticleSpring.html">Tw2ParticleSpring</a></li><li><a href="Tw2ParticleSystem.html">Tw2ParticleSystem</a></li><li><a href="Tw2ParticleSystem_GetInstanceBuffer.html">GetInstanceBuffer</a></li><li><a href="Tw2ParticleTurbulenceForce.html">Tw2ParticleTurbulenceForce</a></li><li><a href="Tw2PerlinCurve.html">Tw2PerlinCurve</a></li><li><a href="Tw2PerObjectData.html">Tw2PerObjectData</a></li><li><a href="Tw2PerObjectData_SetPerObjectDataToDevice.html">SetPerObjectDataToDevice</a></li><li><a href="Tw2PostProcess.html">Tw2PostProcess</a></li><li><a href="Tw2QuaternionCurve.html">Tw2QuaternionCurve</a></li><li><a href="Tw2QuaternionKey.html">Tw2QuaternionKey</a></li><li><a href="Tw2QuaternionKey2.html">Tw2QuaternionKey2</a></li><li><a href="Tw2QuaternionSequencer.html">Tw2QuaternionSequencer</a></li><li><a href="Tw2RandomConstantCurve.html">Tw2RandomConstantCurve</a></li><li><a href="Tw2RandomIntegerAttributeGenerator.html">Tw2RandomIntegerAttributeGenerator</a></li><li><a href="Tw2RandomUniformAttributeGenerator.html">Tw2RandomUniformAttributeGenerator</a></li><li><a href="Tw2RawData.html">Tw2RawData</a></li><li><a href="Tw2RenderBatch.html">Tw2RenderBatch</a></li><li><a href="Tw2RenderTarget.html">Tw2RenderTarget</a></li><li><a href="Tw2ResMan.html">Tw2ResMan</a></li><li><a href="Tw2Resource.html">Tw2Resource</a></li><li><a href="Tw2RGBAScalarSequencer.html">Tw2RGBAScalarSequencer</a></li><li><a href="Tw2RigidOrientation.html">Tw2RigidOrientation</a></li><li><a href="Tw2RotationCurve.html">Tw2RotationCurve</a></li><li><a href="Tw2RuntimeInstanceData.html">Tw2RuntimeInstanceData</a></li><li><a href="Tw2RuntimeInstanceData_SetData.html">SetData</a></li><li><a href="Tw2RuntimeInstanceData_SetItemElement.html">SetItemElement</a></li><li><a href="Tw2RuntimeInstanceData_SetItemElementRef.html">SetItemElementRef</a></li><li><a href="Tw2SamplerOverride.html">Tw2SamplerOverride</a></li><li><a href="Tw2SamplerState.html">Tw2SamplerState</a></li><li><a href="Tw2ScalarCurve.html">Tw2ScalarCurve</a></li><li><a href="Tw2ScalarCurve2.html">Tw2ScalarCurve2</a></li><li><a href="Tw2ScalarKey.html">Tw2ScalarKey</a></li><li><a href="Tw2ScalarKey2.html">Tw2ScalarKey2</a></li><li><a href="Tw2ScalarSequencer.html">Tw2ScalarSequencer</a></li><li><a href="Tw2SineCurve.html">Tw2SineCurve</a></li><li><a href="Tw2SphereShapeAttributeGenerator.html">Tw2SphereShapeAttributeGenerator</a></li><li><a href="Tw2StaticEmitter.html">Tw2StaticEmitter</a></li><li><a href="Tw2TextureParameter.html">Tw2TextureParameter</a></li><li><a href="Tw2TextureParameter_SetTexturePath.html">SetTexturePath</a></li><li><a href="Tw2TextureRes.html">Tw2TextureRes</a></li><li><a href="Tw2TextureRes_Attach.html">Attach</a></li><li><a href="Tw2TextureRes_Bind.html">Bind</a></li><li><a href="Tw2TextureRes_Unload.html">Unload</a></li><li><a href="Tw2Torque.html">Tw2Torque</a></li><li><a href="Tw2Track.html">Tw2Track</a></li><li><a href="Tw2TrackGroup.html">Tw2TrackGroup</a></li><li><a href="Tw2TransformParameter.html">Tw2TransformParameter</a></li><li><a href="Tw2TransformParameter_Apply.html">Apply</a></li><li><a href="Tw2TransformTrack.html">Tw2TransformTrack</a></li><li><a href="Tw2ValueBinding.html">Tw2ValueBinding</a></li><li><a href="Tw2VariableParameter.html">Tw2VariableParameter</a></li><li><a href="Tw2VariableStore.html">Tw2VariableStore</a></li><li><a href="Tw2VariableStore_RegisterType.html">RegisterType</a></li><li><a href="Tw2VariableStore_RegisterVariable.html">RegisterVariable</a></li><li><a href="Tw2VariableStore_RegisterVariableWithType.html">RegisterVariableWithType</a></li><li><a href="Tw2Vector2Curve.html">Tw2Vector2Curve</a></li><li><a href="Tw2Vector2Key.html">Tw2Vector2Key</a></li><li><a href="Tw2Vector2Parameter.html">Tw2Vector2Parameter</a></li><li><a href="Tw2Vector3Curve.html">Tw2Vector3Curve</a></li><li><a href="Tw2Vector3Key.html">Tw2Vector3Key</a></li><li><a href="Tw2Vector3Parameter.html">Tw2Vector3Parameter</a></li><li><a href="Tw2Vector4Parameter.html">Tw2Vector4Parameter</a></li><li><a href="Tw2VectorCurve.html">Tw2VectorCurve</a></li><li><a href="Tw2VectorKey.html">Tw2VectorKey</a></li><li><a href="Tw2VectorSequencer.html">Tw2VectorSequencer</a></li><li><a href="Tw2VertexDeclaration.html">Tw2VertexDeclaration</a></li><li><a href="Tw2VertexElement.html">Tw2VertexElement</a></li><li><a href="Tw2WbgTrack.html">Tw2WbgTrack</a></li><li><a href="Tw2WbgTransformTrack.html">Tw2WbgTransformTrack</a></li><li><a href="Tw2XYZScalarSequencer.html">Tw2XYZScalarSequencer</a></li><li><a href="Tw2YPRSequencer.html">Tw2YPRSequencer</a></li></ul><h3>Global</h3><ul><li><a href="global.html#ag_horner1">ag_horner1</a></li><li><a href="global.html#ag_zeroin">ag_zeroin</a></li><li><a href="global.html#ag_zeroin2">ag_zeroin2</a></li><li><a href="global.html#emitter">emitter</a></li><li><a href="global.html#EveStation">EveStation</a></li><li><a href="global.html#EveTurretSetLocatorInfo">EveTurretSetLocatorInfo</a></li><li><a href="global.html#Inherit">Inherit</a></li><li><a href="global.html#Perlin_init">Perlin_init</a></li><li><a href="global.html#Perlin_noise1">Perlin_noise1</a></li><li><a href="global.html#PerlinNoise1D">PerlinNoise1D</a></li><li><a href="global.html#polyZeroes">polyZeroes</a></li><li><a href="global.html#Tw2AnimationController">Tw2AnimationController</a></li><li><a href="global.html#Tw2EventEmitter">Tw2EventEmitter</a></li><li><a href="global.html#vec3Hermite">vec3Hermite</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 3.4.3</a> on Sun May 07 2017 02:25:29 GMT-0400 (EDT)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

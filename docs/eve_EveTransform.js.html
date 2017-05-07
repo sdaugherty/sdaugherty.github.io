@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: eve/EveTransform.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: eve/EveTransform.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/**
+ * EveBasicPerObjectData
+ * @parameter perObjectVSData - Vertex shader data
+ * @parameter perObjectPSData - Pixel shader data
+ * @parameter perObjectFFEData - Fixed Function Emulation data
+ * @constructor
+ */
+function EveBasicPerObjectData()
+{}
+
+/**
+ * SetPerObjectDataToDevice
+ * @param constantBufferHandles
+ * @constructor
+ */
+EveBasicPerObjectData.prototype.SetPerObjectDataToDevice = function(constantBufferHandles)
+{
+    if (this.perObjectVSData &amp;&amp; constantBufferHandles[3])
+    {
+        device.gl.uniform4fv(constantBufferHandles[3], this.perObjectVSData.data);
+    }
+    if (this.perObjectPSData &amp;&amp; constantBufferHandles[4])
+    {
+        device.gl.uniform4fv(constantBufferHandles[4], this.perObjectPSData.data);
+    }
+    if (this.perObjectFFEData &amp;&amp; constantBufferHandles[5])
+    {
+        device.gl.uniform4fv(constantBufferHandles[5], this.perObjectFFEData.data);
+    }
+};
+
+/**
+ * EveTransform
+ * @property {String} name
+ * @property {Tw2Mesh} mesh
+ * @property {Number} Modifier
+ * @property {Number} NONE - modifier option
+ * @property {Number} BILLBOARD - modifier option
+ * @property {Number} TRANSLATE_WITH_CAMERA - modifier option
+ * @property {Number} LOOK_AT_CAMERA - modifier option
+ * @property {Number} SIMPLE_HALO - modifier option
+ * @property {Number} EVE_CAMERA_ROTATION_ALIGNED - modifier option
+ * @property {Number} EVE_BOOSTER - modifier option
+ * @property {Number} EVE_SIMPLE_HALO - modifier option
+ * @property {Number} EVE_CAMERA_ROTATION - modifier option
+ * @property {Number} sortValueMultiplier
+ * @property {Number} distanceBasedScaleArg1
+ * @property {Number} distanceBasedScaleArg2
+ * @property {Boolean} useDistanceBasedScale
+ * @property {Array.&lt;Tw2ParticleSystem>} particleSystems
+ * @property {Array.&lt;Tw2ParticleEmitter>} particleEmitters
+ * @property {Array.&lt;Tw2CurveSet>} curveSets
+ * @property {Array} children
+ * @property {Boolean} display                                      - Enables/ disables all batch accumulations
+ * @property {{}} visible                                           - Batch accumulation options for the transforms's elements
+ * @property {Boolean} visible.mesh                                 - Enables/ disables mesh batch accumulation
+ * @property {Boolean} visible.children                             - Enables/ disables child batch accumulation
+ * @property {vec3} scaling
+ * @property {vec3} translation
+ * @property {quat4} rotation
+ * @property {mat4} localTransform
+ * @property {mat4} rotationTransform
+ * @property {mat4} worldTransform
+ * @property {Array.&lt;mat4>} _mat4Cache
+ * @property {Array.&lt;vec3>} _vec3Cache
+ * @property {EveBasicPerObjectData} _perObjectData
+ * @constructor
+ */
+function EveTransform()
+{
+    this.name = '';
+    this.mesh = null;
+
+    this.NONE = 0;
+    this.BILLBOARD = 1;
+    this.TRANSLATE_WITH_CAMERA = 2;
+    this.LOOK_AT_CAMERA = 3;
+    this.SIMPLE_HALO = 4;
+    this.EVE_CAMERA_ROTATION_ALIGNED = 100;
+    this.EVE_BOOSTER = 101;
+    this.EVE_SIMPLE_HALO = 102;
+    this.EVE_CAMERA_ROTATION = 103;
+    this.modifier = this.NONE;
+
+    this.sortValueMultiplier = 1.0;
+    this.distanceBasedScaleArg1 = 0.2;
+    this.distanceBasedScaleArg2 = 0.63;
+    this.useDistanceBasedScale = false;
+
+    this.particleSystems = [];
+    this.particleEmitters = [];
+    this.curveSets = [];
+    this.children = [];
+
+    this.display = true;
+    this.visible = {};
+    this.visible.mesh = true;
+    this.visible.children = true;
+
+    this.scaling = vec3.create([1, 1, 1]);
+    this.translation = vec3.create([0, 0, 0]);
+    this.rotation = quat4.create([0, 0, 0, 1]);
+    this.localTransform = mat4.create();
+    this.rotationTransform = mat4.identity(mat4.create());
+    this.worldTransform = mat4.identity(mat4.create());
+
+    this._mat4Cache = [mat4.create(), mat4.create()];
+    this._vec3Cache = [];
+    for (var i = 0; i &lt; 7; ++i)
+    {
+        this._vec3Cache[i] = vec3.create();
+    }
+
+    this._perObjectData = new EveBasicPerObjectData();
+    this._perObjectData.perObjectFFEData = new Tw2RawData();
+    this._perObjectData.perObjectFFEData.Declare('World', 16);
+    this._perObjectData.perObjectFFEData.Declare('WorldInverseTranspose', 16);
+    this._perObjectData.perObjectFFEData.Create();
+}
+
+/**
+ * Initializes the EveTransform
+ */
+EveTransform.prototype.Initialize = function()
+{
+    mat4.identity(this.localTransform);
+    mat4.translate(this.localTransform, this.translation);
+    mat4.transpose(quat4.toMat4(this.rotation, this.rotationTransform));
+    mat4.multiply(this.localTransform, this.rotationTransform, this.localTransform);
+    mat4.scale(this.localTransform, this.scaling);
+};
+
+/**
+ * Gets transform res objects
+ * @param {Array} [out=[]] - Optional receiving array
+ * @param {Boolean} excludeChildren - True to exclude children's res objects
+ * @returns {Array.&lt;Tw2EffectRes|Tw2TextureRes|Tw2GeometryRes>} [out]
+ */
+EveTransform.prototype.GetResources = function(out, excludeChildren)
+{
+    if (out === undefined)
+    {
+        out = [];
+    }
+
+    if (this.mesh !== null)
+    {
+        this.mesh.GetResources(out);
+    }
+
+    if (!excludeChildren)
+    {
+        for (var i = 0; i &lt; this.children; i++)
+        {
+            this.children[i].GetResources(out);
+        }
+    }
+
+    return out;
+};
+
+/**
+ * Gets render batches for accumulation
+ * @param {RenderMode} mode
+ * @param {Tw2BatchAccumulator} accumulator
+ * @param {Tw2PerObjectData} perObjectData
+ */
+EveTransform.prototype.GetBatches = function(mode, accumulator, perObjectData)
+{
+    if (!this.display)
+    {
+        return;
+    }
+
+    if (this.visible.mesh &amp;&amp; this.mesh != null)
+    {
+        mat4.transpose(this.worldTransform, this._perObjectData.perObjectFFEData.Get('World'));
+        mat4.inverse(this.worldTransform, this._perObjectData.perObjectFFEData.Get('WorldInverseTranspose'));
+        if (perObjectData)
+        {
+            this._perObjectData.perObjectVSData = perObjectData.perObjectVSData;
+            this._perObjectData.perObjectPSData = perObjectData.perObjectPSData;
+        }
+        this.mesh.GetBatches(mode, accumulator, this._perObjectData);
+    }
+
+    if (this.visible.children)
+    {
+        for (var i = 0; i &lt; this.children.length; ++i)
+        {
+            this.children[i].GetBatches(mode, accumulator, perObjectData);
+        }
+    }
+};
+
+/**
+ * Per frame update
+ * @param {Number} dt - delta time
+ */
+EveTransform.prototype.Update = function(dt)
+{
+    for (var i = 0; i &lt; this.children.length; ++i)
+    {
+        this.children[i].Update(dt);
+    }
+    for (var i = 0; i &lt; this.particleEmitters.length; ++i)
+    {
+        this.particleEmitters[i].Update(dt);
+    }
+    for (var i = 0; i &lt; this.particleSystems.length; ++i)
+    {
+        this.particleSystems[i].Update(dt);
+    }
+    for (var i = 0; i &lt; this.curveSets.length; ++i)
+    {
+        this.curveSets[i].Update(dt);
+    }
+};
+
+/**
+ * multiply3x3
+ */
+mat4.multiply3x3 = function(a, b, c)
+{
+    c || (c = b);
+    var d = b[0],
+        e = b[1];
+    b = b[2];
+    c[0] = a[0] * d + a[4] * e + a[8] * b;
+    c[1] = a[1] * d + a[5] * e + a[9] * b;
+    c[2] = a[2] * d + a[6] * e + a[10] * b;
+    return c;
+};
+
+/**
+ * Per frame update
+ * @param {mat4} parentTransform
+ */
+EveTransform.prototype.UpdateViewDependentData = function(parentTransform)
+{
+    mat4.identity(this.localTransform);
+    mat4.translate(this.localTransform, this.translation);
+    mat4.transpose(quat4.toMat4(quat4.normalize(this.rotation), this.rotationTransform));
+    mat4.multiply(this.localTransform, this.rotationTransform, this.localTransform);
+    mat4.scale(this.localTransform, this.scaling);
+    switch (this.modifier)
+    {
+        case this.BILLBOARD:
+        case this.SIMPLE_HALO:
+            {
+                mat4.multiply(parentTransform, this.localTransform, this.worldTransform);
+
+                var finalScale = this._vec3Cache[0];
+                vec3.set(this.scaling, finalScale);
+                var parentScaleX = vec3.length(parentTransform);
+                var parentScaleY = vec3.length(parentTransform.subarray(4));
+                var parentScaleZ = vec3.length(parentTransform.subarray(8));
+                finalScale[0] *= parentScaleX;
+                finalScale[1] *= parentScaleY;
+                finalScale[2] *= parentScaleZ;
+                if (this.modifier == this.SIMPLE_HALO)
+                {
+                    var camPos = device.GetEyePosition();
+                    var d = this._vec3Cache[1];
+                    vec3.subtract(camPos, this.worldTransform.subarray(12), d);
+                    var scale = vec3.dot(vec3.normalize(d), vec3.normalize(this.worldTransform.subarray(8), this._vec3Cache[2]));
+                    if (scale &lt; 0)
+                    {
+                        scale = 0;
+                    }
+                    vec3.scale(finalScale, scale * scale);
+                }
+                var invView = device.viewInv;
+                this.worldTransform[0] = invView[0] * finalScale[0];
+                this.worldTransform[1] = invView[1] * finalScale[0];
+                this.worldTransform[2] = invView[2] * finalScale[0];
+                this.worldTransform[4] = invView[4] * finalScale[1];
+                this.worldTransform[5] = invView[5] * finalScale[1];
+                this.worldTransform[6] = invView[6] * finalScale[1];
+                this.worldTransform[8] = invView[8] * finalScale[2];
+                this.worldTransform[9] = invView[9] * finalScale[2];
+                this.worldTransform[10] = invView[10] * finalScale[2];
+            }
+            break;
+
+        case this.EVE_CAMERA_ROTATION:
+            {
+                var newTranslation = mat4.multiplyVec3(parentTransform, this.translation, vec3.create());
+
+                mat4.identity(this.localTransform);
+                mat4.translate(this.localTransform, newTranslation);
+                mat4.transpose(quat4.toMat4(this.rotation, this.rotationTransform));
+                mat4.multiply(this.localTransform, this.rotationTransform, this.localTransform);
+                mat4.scale(this.localTransform, this.scaling);
+
+                var x = this.localTransform[12];
+                var y = this.localTransform[13];
+                var z = this.localTransform[14];
+                mat4.multiply(device.viewInv, this.localTransform, this.worldTransform);
+                this.worldTransform[12] = x;
+                this.worldTransform[13] = y;
+                this.worldTransform[14] = z;
+            }
+            break;
+
+        case this.EVE_CAMERA_ROTATION_ALIGNED:
+        case this.EVE_SIMPLE_HALO:
+            {
+                // 3 4 3 3 3 4 3 3
+                mat4.translate(parentTransform, this.translation, this.worldTransform);
+
+                var camPos = device.GetEyePosition();
+                var d = this._vec3Cache[0];
+                d[0] = camPos[0] - this.worldTransform[12];
+                d[1] = camPos[1] - this.worldTransform[13];
+                d[2] = camPos[2] - this.worldTransform[14];
+
+                var parentT = this._mat4Cache[0];
+                mat4.transpose(parentTransform, parentT);
+                var camFwd = this._vec3Cache[1];
+                vec3.set(d, camFwd);
+                mat4.multiply3x3(parentT, camFwd);
+
+                var parentScaleX = vec3.length(parentTransform);
+                camFwd[0] /= parentScaleX;
+                var parentScaleY = vec3.length(parentTransform.subarray(4));
+                camFwd[1] /= parentScaleY;
+                var parentScaleZ = vec3.length(parentTransform.subarray(8));
+                camFwd[2] /= parentScaleZ;
+
+                var distCenter = vec3.length(camFwd);
+                vec3.normalize(camFwd);
+
+                var right = this._vec3Cache[2];
+                right[0] = device.view[0];
+                right[1] = device.view[4];
+                right[2] = device.view[8];
+                mat4.multiply3x3(parentT, right);
+                vec3.normalize(right);
+
+                var up = this._vec3Cache[3];
+                vec3.cross(camFwd, right, up);
+                vec3.normalize(up);
+
+                var alignMat = this._mat4Cache[1];
+                vec3.cross(up, camFwd, right);
+                alignMat[0] = right[0];
+                alignMat[1] = right[1];
+                alignMat[2] = right[2];
+                alignMat[4] = up[0];
+                alignMat[5] = up[1];
+                alignMat[6] = up[2];
+                alignMat[8] = camFwd[0];
+                alignMat[9] = camFwd[1];
+                alignMat[10] = camFwd[2];
+                alignMat[15] = 1;
+                mat4.multiply(alignMat, this.rotationTransform, alignMat);
+
+                if (this.modifier == this.EVE_SIMPLE_HALO)
+                {
+                    var forward = this._vec3Cache[4];
+                    vec3.normalize(this.worldTransform.subarray(8), forward);
+                    var dirToCamNorm = d;
+                    vec3.normalize(dirToCamNorm);
+                    var scale = -vec3.dot(dirToCamNorm, forward);
+                    if (scale &lt; 0)
+                    {
+                        scale = 0;
+                    }
+                    mat4.multiply(this.worldTransform, alignMat, this.worldTransform);
+                    mat4.scale(this.worldTransform, [this.scaling[0] * scale, this.scaling[1] * scale, this.scaling[2] * scale]);
+                }
+                else
+                {
+                    mat4.scale(this.worldTransform, this.scaling);
+                    mat4.multiply(this.worldTransform, alignMat, this.worldTransform);
+                }
+            }
+            break;
+
+        case this.LOOK_AT_CAMERA:
+            {
+                mat4.multiply(parentTransform, this.localTransform, this.worldTransform);
+                var invView = this._mat4Cache[0];
+                mat4.lookAt(device.viewInv.subarray(12), this.worldTransform.subarray(12), [0, 1, 0], invView);
+                mat4.transpose(invView);
+
+                var finalScale = this._vec3Cache[0];
+                vec3.set(this.scaling, finalScale);
+                var parentScaleX = vec3.length(parentTransform);
+                var parentScaleY = vec3.length(parentTransform.subarray(4));
+                var parentScaleZ = vec3.length(parentTransform.subarray(8));
+                finalScale[0] *= parentScaleX;
+                finalScale[1] *= parentScaleY;
+                finalScale[2] *= parentScaleZ;
+
+                this.worldTransform[0] = invView[0] * finalScale[0];
+                this.worldTransform[1] = invView[1] * finalScale[0];
+                this.worldTransform[2] = invView[2] * finalScale[0];
+                this.worldTransform[4] = invView[4] * finalScale[1];
+                this.worldTransform[5] = invView[5] * finalScale[1];
+                this.worldTransform[6] = invView[6] * finalScale[1];
+                this.worldTransform[8] = invView[8] * finalScale[2];
+                this.worldTransform[9] = invView[9] * finalScale[2];
+                this.worldTransform[10] = invView[10] * finalScale[2];
+            }
+            break;
+
+        default:
+            mat4.multiply(parentTransform, this.localTransform, this.worldTransform);
+    }
+
+    for (var i = 0; i &lt; this.children.length; ++i)
+    {
+        this.children[i].UpdateViewDependentData(this.worldTransform);
+    }
+};
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="EveBasicPerObjectData.html">EveBasicPerObjectData</a></li><li><a href="EveBasicPerObjectData_SetPerObjectDataToDevice.html">SetPerObjectDataToDevice</a></li><li><a href="EveBoosterBatch.html">EveBoosterBatch</a></li><li><a href="EveBoosterSet.html">EveBoosterSet</a></li><li><a href="EveBoosterSet_Add.html">Add</a></li><li><a href="EveBoosterSet_Update.html">Update</a></li><li><a href="EveChildBillboard.html">EveChildBillboard</a></li><li><a href="EveChildContainer.html">EveChildContainer</a></li><li><a href="EveChildExplosion.html">EveChildExplosion</a></li><li><a href="EveChildMesh.html">EveChildMesh</a></li><li><a href="EveChildParticleSystem.html">EveChildParticleSystem</a></li><li><a href="EveCurveLineSet.html">EveCurveLineSet</a></li><li><a href="EveEffectRoot.html">EveEffectRoot</a></li><li><a href="EveLensflare.html">EveLensflare</a></li><li><a href="EveLocator.html">EveLocator</a></li><li><a href="EveMeshOverlayEffect.html">EveMeshOverlayEffect</a></li><li><a href="EveMissile.html">EveMissile</a></li><li><a href="EveMissileWarhead.html">EveMissileWarhead</a></li><li><a href="EveOccluder.html">EveOccluder</a></li><li><a href="EvePlaneSet.html">EvePlaneSet</a></li><li><a href="EvePlaneSet_Render.html">Render</a></li><li><a href="EvePlaneSetBatch.html">EvePlaneSetBatch</a></li><li><a href="EvePlaneSetBatch_Commit.html">Commit</a></li><li><a href="EvePlaneSetItem.html">EvePlaneSetItem</a></li><li><a href="EvePlanet.html">EvePlanet</a></li><li><a href="EvePlanet_GetPlanetResources.html">GetPlanetResources</a></li><li><a href="EveShip.html">EveShip</a></li><li><a href="EveSpaceObject.html">EveSpaceObject</a></li><li><a href="EveSpaceObjectDecal.html">EveSpaceObjectDecal</a></li><li><a href="EveSpaceScene.html">EveSpaceScene</a></li><li><a href="EveSpotlightSet.html">EveSpotlightSet</a></li><li><a href="EveSpotlightSetBatch.html">EveSpotlightSetBatch</a></li><li><a href="EveSpotlightSetItem.html">EveSpotlightSetItem</a></li><li><a href="EveSpriteSet.html">EveSpriteSet</a></li><li><a href="EveSpriteSet_Add.html">Add</a></li><li><a href="EveSpriteSetBatch.html">EveSpriteSetBatch</a></li><li><a href="EveSpriteSetItem.html">EveSpriteSetItem</a></li><li><a href="EveStretch.html">EveStretch</a></li><li><a href="EveTransform.html">EveTransform</a></li><li><a href="EveTurretData.html">EveTurretData</a></li><li><a href="EveTurretSet.html">EveTurretSet</a></li><li><a href="EveTurretSet_UpdateViewDependentData.html">UpdateViewDependentData</a></li><li><a href="Tr2ParticleElement.html">Tr2ParticleElement</a></li><li><a href="Tw2Animation.html">Tw2Animation</a></li><li><a href="Tw2AnimationController_GetAnimation.html">GetAnimation</a></li><li><a href="Tw2AnimationController_GetPlayingAnimations.html">GetPlayingAnimations</a></li><li><a href="Tw2AnimationController_ResetAnimation.html">ResetAnimation</a></li><li><a href="Tw2BatchAccumulator.html">Tw2BatchAccumulator</a></li><li><a href="Tw2BinaryReader.html">Tw2BinaryReader</a></li><li><a href="Tw2BlendShapeData.html">Tw2BlendShapeData</a></li><li><a href="Tw2Bone.html">Tw2Bone</a></li><li><a href="Tw2ColorCurve.html">Tw2ColorCurve</a></li><li><a href="Tw2ColorCurve2.html">Tw2ColorCurve2</a></li><li><a href="Tw2ColorKey.html">Tw2ColorKey</a></li><li><a href="Tw2ColorKey2.html">Tw2ColorKey2</a></li><li><a href="Tw2ColorSequencer.html">Tw2ColorSequencer</a></li><li><a href="Tw2CurveSet.html">Tw2CurveSet</a></li><li><a href="Tw2Device.html">Tw2Device</a></li><li><a href="Tw2Device_SetStandardStates.html">SetStandardStates</a></li><li><a href="Tw2DynamicEmitter.html">Tw2DynamicEmitter</a></li><li><a href="Tw2Effect.html">Tw2Effect</a></li><li><a href="Tw2EffectRes.html">Tw2EffectRes</a></li><li><a href="Tw2EulerRotation.html">Tw2EulerRotation</a></li><li><a href="Tw2EventCurve.html">Tw2EventCurve</a></li><li><a href="Tw2EventKey.html">Tw2EventKey</a></li><li><a href="Tw2Float.html">Tw2Float</a></li><li><a href="Tw2FloatParameter.html">Tw2FloatParameter</a></li><li><a href="Tw2ForwardingRenderBatch.html">Tw2ForwardingRenderBatch</a></li><li><a href="Tw2Frustum.html">Tw2Frustum</a></li><li><a href="Tw2GeometryAnimation.html">Tw2GeometryAnimation</a></li><li><a href="Tw2GeometryBatch.html">Tw2GeometryBatch</a></li><li><a href="Tw2GeometryBone.html">Tw2GeometryBone</a></li><li><a href="Tw2GeometryCurve.html">Tw2GeometryCurve</a></li><li><a href="Tw2GeometryLineBatch.html">Tw2GeometryLineBatch</a></li><li><a href="Tw2GeometryMesh.html">Tw2GeometryMesh</a></li><li><a href="Tw2GeometryMeshArea.html">Tw2GeometryMeshArea</a></li><li><a href="Tw2GeometryMeshBinding.html">Tw2GeometryMeshBinding</a></li><li><a href="Tw2GeometryModel.html">Tw2GeometryModel</a></li><li><a href="Tw2GeometryModel_FindBoneByName.html">FindBoneByName</a></li><li><a href="Tw2GeometryRes.html">Tw2GeometryRes</a></li><li><a href="Tw2GeometrySkeleton.html">Tw2GeometrySkeleton</a></li><li><a href="Tw2GeometryTrackGroup.html">Tw2GeometryTrackGroup</a></li><li><a href="Tw2GeometryTransformTrack.html">Tw2GeometryTransformTrack</a></li><li><a href="Tw2InstancedMesh.html">Tw2InstancedMesh</a></li><li><a href="Tw2InstancedMeshBatch.html">Tw2InstancedMeshBatch</a></li><li><a href="Tw2LoadingObject.html">Tw2LoadingObject</a></li><li><a href="Tw2MatrixParameter.html">Tw2MatrixParameter</a></li><li><a href="Tw2MayaAnimationEngine.html">Tw2MayaAnimationEngine</a></li><li><a href="Tw2MayaEulerRotationCurve.html">Tw2MayaEulerRotationCurve</a></li><li><a href="Tw2MayaScalarCurve.html">Tw2MayaScalarCurve</a></li><li><a href="Tw2MayaVector3Curve.html">Tw2MayaVector3Curve</a></li><li><a href="Tw2Mesh.html">Tw2Mesh</a></li><li><a href="Tw2MeshArea.html">Tw2MeshArea</a></li><li><a href="Tw2MeshLineArea.html">Tw2MeshLineArea</a></li><li><a href="Tw2Model.html">Tw2Model</a></li><li><a href="Tw2MotherLode.html">Tw2MotherLode</a></li><li><a href="Tw2ObjectReader.html">Tw2ObjectReader</a></li><li><a href="Tw2ParticleAttractorForce.html">Tw2ParticleAttractorForce</a></li><li><a href="Tw2ParticleDirectForce.html">Tw2ParticleDirectForce</a></li><li><a href="Tw2ParticleDragForce.html">Tw2ParticleDragForce</a></li><li><a href="Tw2ParticleElementDeclaration.html">Tw2ParticleElementDeclaration</a></li><li><a href="Tw2ParticleFluidDragForce.html">Tw2ParticleFluidDragForce</a></li><li><a href="Tw2ParticleSpring.html">Tw2ParticleSpring</a></li><li><a href="Tw2ParticleSystem.html">Tw2ParticleSystem</a></li><li><a href="Tw2ParticleSystem_GetInstanceBuffer.html">GetInstanceBuffer</a></li><li><a href="Tw2ParticleTurbulenceForce.html">Tw2ParticleTurbulenceForce</a></li><li><a href="Tw2PerlinCurve.html">Tw2PerlinCurve</a></li><li><a href="Tw2PerObjectData.html">Tw2PerObjectData</a></li><li><a href="Tw2PerObjectData_SetPerObjectDataToDevice.html">SetPerObjectDataToDevice</a></li><li><a href="Tw2PostProcess.html">Tw2PostProcess</a></li><li><a href="Tw2QuaternionCurve.html">Tw2QuaternionCurve</a></li><li><a href="Tw2QuaternionKey.html">Tw2QuaternionKey</a></li><li><a href="Tw2QuaternionKey2.html">Tw2QuaternionKey2</a></li><li><a href="Tw2QuaternionSequencer.html">Tw2QuaternionSequencer</a></li><li><a href="Tw2RandomConstantCurve.html">Tw2RandomConstantCurve</a></li><li><a href="Tw2RandomIntegerAttributeGenerator.html">Tw2RandomIntegerAttributeGenerator</a></li><li><a href="Tw2RandomUniformAttributeGenerator.html">Tw2RandomUniformAttributeGenerator</a></li><li><a href="Tw2RawData.html">Tw2RawData</a></li><li><a href="Tw2RenderBatch.html">Tw2RenderBatch</a></li><li><a href="Tw2RenderTarget.html">Tw2RenderTarget</a></li><li><a href="Tw2ResMan.html">Tw2ResMan</a></li><li><a href="Tw2Resource.html">Tw2Resource</a></li><li><a href="Tw2RGBAScalarSequencer.html">Tw2RGBAScalarSequencer</a></li><li><a href="Tw2RigidOrientation.html">Tw2RigidOrientation</a></li><li><a href="Tw2RotationCurve.html">Tw2RotationCurve</a></li><li><a href="Tw2RuntimeInstanceData.html">Tw2RuntimeInstanceData</a></li><li><a href="Tw2RuntimeInstanceData_SetData.html">SetData</a></li><li><a href="Tw2RuntimeInstanceData_SetItemElement.html">SetItemElement</a></li><li><a href="Tw2RuntimeInstanceData_SetItemElementRef.html">SetItemElementRef</a></li><li><a href="Tw2SamplerOverride.html">Tw2SamplerOverride</a></li><li><a href="Tw2SamplerState.html">Tw2SamplerState</a></li><li><a href="Tw2ScalarCurve.html">Tw2ScalarCurve</a></li><li><a href="Tw2ScalarCurve2.html">Tw2ScalarCurve2</a></li><li><a href="Tw2ScalarKey.html">Tw2ScalarKey</a></li><li><a href="Tw2ScalarKey2.html">Tw2ScalarKey2</a></li><li><a href="Tw2ScalarSequencer.html">Tw2ScalarSequencer</a></li><li><a href="Tw2SineCurve.html">Tw2SineCurve</a></li><li><a href="Tw2SphereShapeAttributeGenerator.html">Tw2SphereShapeAttributeGenerator</a></li><li><a href="Tw2StaticEmitter.html">Tw2StaticEmitter</a></li><li><a href="Tw2TextureParameter.html">Tw2TextureParameter</a></li><li><a href="Tw2TextureParameter_SetTexturePath.html">SetTexturePath</a></li><li><a href="Tw2TextureRes.html">Tw2TextureRes</a></li><li><a href="Tw2TextureRes_Attach.html">Attach</a></li><li><a href="Tw2TextureRes_Bind.html">Bind</a></li><li><a href="Tw2TextureRes_Unload.html">Unload</a></li><li><a href="Tw2Torque.html">Tw2Torque</a></li><li><a href="Tw2Track.html">Tw2Track</a></li><li><a href="Tw2TrackGroup.html">Tw2TrackGroup</a></li><li><a href="Tw2TransformParameter.html">Tw2TransformParameter</a></li><li><a href="Tw2TransformParameter_Apply.html">Apply</a></li><li><a href="Tw2TransformTrack.html">Tw2TransformTrack</a></li><li><a href="Tw2ValueBinding.html">Tw2ValueBinding</a></li><li><a href="Tw2VariableParameter.html">Tw2VariableParameter</a></li><li><a href="Tw2VariableStore.html">Tw2VariableStore</a></li><li><a href="Tw2VariableStore_RegisterType.html">RegisterType</a></li><li><a href="Tw2VariableStore_RegisterVariable.html">RegisterVariable</a></li><li><a href="Tw2VariableStore_RegisterVariableWithType.html">RegisterVariableWithType</a></li><li><a href="Tw2Vector2Curve.html">Tw2Vector2Curve</a></li><li><a href="Tw2Vector2Key.html">Tw2Vector2Key</a></li><li><a href="Tw2Vector2Parameter.html">Tw2Vector2Parameter</a></li><li><a href="Tw2Vector3Curve.html">Tw2Vector3Curve</a></li><li><a href="Tw2Vector3Key.html">Tw2Vector3Key</a></li><li><a href="Tw2Vector3Parameter.html">Tw2Vector3Parameter</a></li><li><a href="Tw2Vector4Parameter.html">Tw2Vector4Parameter</a></li><li><a href="Tw2VectorCurve.html">Tw2VectorCurve</a></li><li><a href="Tw2VectorKey.html">Tw2VectorKey</a></li><li><a href="Tw2VectorSequencer.html">Tw2VectorSequencer</a></li><li><a href="Tw2VertexDeclaration.html">Tw2VertexDeclaration</a></li><li><a href="Tw2VertexElement.html">Tw2VertexElement</a></li><li><a href="Tw2WbgTrack.html">Tw2WbgTrack</a></li><li><a href="Tw2WbgTransformTrack.html">Tw2WbgTransformTrack</a></li><li><a href="Tw2XYZScalarSequencer.html">Tw2XYZScalarSequencer</a></li><li><a href="Tw2YPRSequencer.html">Tw2YPRSequencer</a></li></ul><h3>Global</h3><ul><li><a href="global.html#ag_horner1">ag_horner1</a></li><li><a href="global.html#ag_zeroin">ag_zeroin</a></li><li><a href="global.html#ag_zeroin2">ag_zeroin2</a></li><li><a href="global.html#emitter">emitter</a></li><li><a href="global.html#EveStation">EveStation</a></li><li><a href="global.html#EveTurretSetLocatorInfo">EveTurretSetLocatorInfo</a></li><li><a href="global.html#Inherit">Inherit</a></li><li><a href="global.html#Perlin_init">Perlin_init</a></li><li><a href="global.html#Perlin_noise1">Perlin_noise1</a></li><li><a href="global.html#PerlinNoise1D">PerlinNoise1D</a></li><li><a href="global.html#polyZeroes">polyZeroes</a></li><li><a href="global.html#Tw2AnimationController">Tw2AnimationController</a></li><li><a href="global.html#Tw2EventEmitter">Tw2EventEmitter</a></li><li><a href="global.html#vec3Hermite">vec3Hermite</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 3.4.3</a> on Sun May 07 2017 02:25:29 GMT-0400 (EDT)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

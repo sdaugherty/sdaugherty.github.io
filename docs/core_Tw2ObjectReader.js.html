@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: core/Tw2ObjectReader.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: core/Tw2ObjectReader.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/**
+ * Tw2ObjectReader
+ * @param xmlNode
+ * @property xmlNode
+ * @property {null|Array} _inputStack
+ * @property {null|Array} _initializeObjects
+ * @property {null|Array} _ids
+ * @constructor
+ */
+function Tw2ObjectReader(xmlNode)
+{
+    this.xmlNode = xmlNode;
+    this._inputStack = null;
+    this._initializeObjects = null;
+    this._ids = {};
+    this._reader = null;
+
+    if (String.fromCharCode.apply(null, (new Uint8Array(xmlNode)).subarray(0, 6)) != 'binred')
+    {
+        emitter.log('res.error',
+        {
+            log: 'error',
+            src: ['Tw2ObjectReader', 'constructor'],
+            msg: 'Invalid Binary',
+            path: this.path,
+            type: 'redbin.invalid',
+            data: xmlNode
+        });
+        return;
+    }
+    this._reader = new Tw2BinaryReader(new Uint8Array(xmlNode));
+    this._reader.cursor += 6;
+
+    this._stringTable = [];
+    var count = this._reader.ReadUInt32();
+    for (var i = 0; i &lt; count; ++i)
+    {
+        var len = this._reader.ReadUInt16();
+        this._stringTable.push(String.fromCharCode.apply(null, this._reader.data.subarray(this._reader.cursor, this._reader.cursor + len)));
+        this._reader.cursor += len;
+    }
+
+    this._start = this._reader.cursor;
+}
+
+Tw2ObjectReader.ElementRawType = {
+    NULL: 0,
+    BOOL: 1,
+    INT: 2,
+    UINT: 3,
+    FLOAT: 4,
+    STRING: 5,
+    ARRAY: 6,
+    MAPPING: 7,
+    OBJECT: 8,
+    TYPED_ARRAY: 9,
+    TYPED_MAPPING: 10
+};
+
+Tw2ObjectReader.ElementSize = {
+    SMALL: 0,
+    MEDIUM: 1 &lt;&lt; 4,
+    LARGE: 2 &lt;&lt; 4
+};
+
+Tw2ObjectReader.ID_BIT = 1 &lt;&lt; 6;
+Tw2ObjectReader.REFERENCE_BIT = 1 &lt;&lt; 7;
+
+Tw2ObjectReader.ElementTypes = {
+    NULL: Tw2ObjectReader.ElementRawType.NULL | Tw2ObjectReader.ElementSize.SMALL,
+
+    BOOL: Tw2ObjectReader.ElementRawType.BOOL | Tw2ObjectReader.ElementSize.SMALL,
+    FALSE: Tw2ObjectReader.ElementRawType.BOOL | Tw2ObjectReader.ElementSize.MEDIUM,
+    TRUE: Tw2ObjectReader.ElementRawType.BOOL | Tw2ObjectReader.ElementSize.LARGE,
+
+    INT8: Tw2ObjectReader.ElementRawType.INT | Tw2ObjectReader.ElementSize.SMALL,
+    UINT8: Tw2ObjectReader.ElementRawType.UINT | Tw2ObjectReader.ElementSize.SMALL,
+    INT16: Tw2ObjectReader.ElementRawType.INT | Tw2ObjectReader.ElementSize.MEDIUM,
+    UINT16: Tw2ObjectReader.ElementRawType.UINT | Tw2ObjectReader.ElementSize.MEDIUM,
+    INT32: Tw2ObjectReader.ElementRawType.INT | Tw2ObjectReader.ElementSize.LARGE,
+    UINT32: Tw2ObjectReader.ElementRawType.UINT | Tw2ObjectReader.ElementSize.LARGE,
+
+    FLOAT16: Tw2ObjectReader.ElementRawType.FLOAT | Tw2ObjectReader.ElementSize.SMALL,
+    FLOAT32: Tw2ObjectReader.ElementRawType.FLOAT | Tw2ObjectReader.ElementSize.MEDIUM,
+    FLOAT64: Tw2ObjectReader.ElementRawType.FLOAT | Tw2ObjectReader.ElementSize.LARGE,
+
+    SHORT_STRING: Tw2ObjectReader.ElementRawType.STRING | Tw2ObjectReader.ElementSize.SMALL,
+    MEDIUM_STRING: Tw2ObjectReader.ElementRawType.STRING | Tw2ObjectReader.ElementSize.MEDIUM,
+    LARGE_STRING: Tw2ObjectReader.ElementRawType.STRING | Tw2ObjectReader.ElementSize.LARGE,
+
+    SHORT_ARRAY: Tw2ObjectReader.ElementRawType.ARRAY | Tw2ObjectReader.ElementSize.SMALL,
+    MEDIUM_ARRAY: Tw2ObjectReader.ElementRawType.ARRAY | Tw2ObjectReader.ElementSize.MEDIUM,
+    LARGE_ARRAY: Tw2ObjectReader.ElementRawType.ARRAY | Tw2ObjectReader.ElementSize.LARGE,
+
+    SHORT_MAPPING: Tw2ObjectReader.ElementRawType.MAPPING | Tw2ObjectReader.ElementSize.SMALL,
+    MEDIUM_MAPPING: Tw2ObjectReader.ElementRawType.MAPPING | Tw2ObjectReader.ElementSize.MEDIUM,
+    LARGE_MAPPING: Tw2ObjectReader.ElementRawType.MAPPING | Tw2ObjectReader.ElementSize.LARGE,
+
+    SHORT_OBJECT: Tw2ObjectReader.ElementRawType.OBJECT | Tw2ObjectReader.ElementSize.SMALL,
+    MEDIUM_OBJECT: Tw2ObjectReader.ElementRawType.OBJECT | Tw2ObjectReader.ElementSize.MEDIUM,
+    LARGE_OBJECT: Tw2ObjectReader.ElementRawType.OBJECT | Tw2ObjectReader.ElementSize.LARGE,
+
+    SHORT_TYPED_ARRAY: Tw2ObjectReader.ElementRawType.TYPED_ARRAY | Tw2ObjectReader.ElementSize.SMALL,
+    MEDIUM_TYPED_ARRAY: Tw2ObjectReader.ElementRawType.TYPED_ARRAY | Tw2ObjectReader.ElementSize.MEDIUM,
+    LARGE_TYPED_ARRAY: Tw2ObjectReader.ElementRawType.TYPED_ARRAY | Tw2ObjectReader.ElementSize.LARGE,
+
+    SHORT_TYPED_MAPPING: Tw2ObjectReader.ElementRawType.TYPED_MAPPING | Tw2ObjectReader.ElementSize.SMALL,
+    MEDIUM_TYPED_MAPPING: Tw2ObjectReader.ElementRawType.TYPED_MAPPING | Tw2ObjectReader.ElementSize.MEDIUM,
+    LARGE_TYPED_MAPPING: Tw2ObjectReader.ElementRawType.TYPED_MAPPING | Tw2ObjectReader.ElementSize.LARGE
+};
+
+Tw2ObjectReader.TypedArrays = {
+    2: Int8Array,
+    3: Uint8Array,
+    18: Int16Array,
+    19: Uint16Array,
+    34: Int32Array,
+    35: Uint32Array,
+    4: Float32Array,
+    20: Float32Array,
+    36: Float64Array
+};
+
+
+Tw2ObjectReader.prototype._ConstructObject = function (data)
+{
+    if (data.type == 'json')
+    {
+        return data;
+    }
+    try
+    {
+        var object = eval("new " + data.type + "()");
+    }
+    catch (e)
+    {
+        emitter.log('res.error',
+        {
+            log: 'throw',
+            src: ['Tw2ObjectReader', 'ConstructFromNode'],
+            msg: 'Object with undefined type',
+            type: 'xml.type',
+            value: data.type
+        });
+
+        throw new Error('YAML: object with undefined type \"' + data.type + '\"');
+    }
+    for (var k in data)
+    {
+        if (data.hasOwnProperty(k) &amp;&amp; k != 'type')
+        {
+            object[k] = data[k];
+        }
+    }
+    if ('Initialize' in object)
+    {
+        object.Initialize();
+    }
+    return object;
+};
+
+
+Tw2ObjectReader.prototype._ReadUint = function (type)
+{
+    switch (type &amp; 0x30)
+    {
+        case Tw2ObjectReader.ElementSize.SMALL:
+            return this._reader.ReadUInt8();
+        case Tw2ObjectReader.ElementSize.MEDIUM:
+            return this._reader.ReadUInt16();
+        default:
+            return this._reader.ReadUInt32();
+    }
+};
+
+Tw2ObjectReader.prototype._ReadElementData = function (type)
+{
+    var offset, i, result, count, elementType;
+    switch (type &amp; 0xf)
+    {
+        case Tw2ObjectReader.ElementRawType.NULL:
+            return null;
+        case Tw2ObjectReader.ElementRawType.BOOL:
+            switch (type &amp; 0x30)
+            {
+                case Tw2ObjectReader.ElementSize.SMALL:
+                    return this._reader.ReadUInt8() != 0;
+                case Tw2ObjectReader.ElementSize.MEDIUM:
+                    return false;
+                default:
+                    return true;
+            }
+        case Tw2ObjectReader.ElementRawType.INT:
+            switch (type &amp; 0x30)
+            {
+                case Tw2ObjectReader.ElementSize.SMALL:
+                    return this._reader.ReadInt8();
+                case Tw2ObjectReader.ElementSize.MEDIUM:
+                    return this._reader.ReadInt16();
+                default:
+                    return this._reader.ReadInt32();
+            }
+        case Tw2ObjectReader.ElementRawType.UINT:
+            return this._ReadUint(type);
+        case Tw2ObjectReader.ElementRawType.FLOAT:
+            switch (type &amp; 0x30)
+            {
+                case Tw2ObjectReader.ElementSize.SMALL:
+                    return this._reader.ReadFloat16();
+                case Tw2ObjectReader.ElementSize.MEDIUM:
+                    return this._reader.ReadFloat32();
+                default:
+                    throw Error('float64 values are not yet supported');
+            }
+        case Tw2ObjectReader.ElementRawType.STRING:
+            offset = this._ReadUint(type);
+            return this._stringTable[offset];
+        case Tw2ObjectReader.ElementRawType.ARRAY:
+            count = this._ReadUint(type);
+            result = [];
+            for (i = 0; i &lt; count; ++i)
+                result.push(this._ReadElement());
+            return result;
+        case Tw2ObjectReader.ElementRawType.MAPPING:
+            count = this._ReadUint(type);
+            result = {};
+            for (i = 0; i &lt; count; ++i)
+                result[this._stringTable[this._ReadUint(type)]] = this._ReadElement();
+            return result;
+        case Tw2ObjectReader.ElementRawType.OBJECT:
+            count = this._ReadUint(type);
+            result = {};
+            for (i = 0; i &lt; count; ++i)
+                result[this._stringTable[this._ReadUint(type)]] = this._ReadElement();
+            return this._ConstructObject(result);
+        case Tw2ObjectReader.ElementRawType.TYPED_ARRAY:
+            count = this._ReadUint(type);
+            elementType = this._reader.ReadUInt8();
+            result = [];
+            for (i = 0; i &lt; count; ++i)
+                result.push(this._ReadElementData(elementType));
+            if (elementType in Tw2ObjectReader.TypedArrays)
+            {
+                result = new Tw2ObjectReader.TypedArrays[elementType](result);
+            }
+            return result;
+        case Tw2ObjectReader.ElementRawType.TYPED_MAPPING:
+            count = this._ReadUint(type);
+            elementType = this._reader.ReadUInt8();
+            result = {};
+            for (i = 0; i &lt; count; ++i)
+                result[this._stringTable[this._ReadUint(type)]] = this._ReadElementData(elementType);
+            return result;
+    }
+};
+
+Tw2ObjectReader.prototype._ReadElement = function()
+{
+    var type = this._reader.ReadUInt8();
+    if (type == Tw2ObjectReader.REFERENCE_BIT)
+    {
+        return this._ids[this._reader.ReadUInt16()];
+    }
+    var id;
+    if ((type &amp; Tw2ObjectReader.ID_BIT) != 0)
+    {
+        id = this._reader.ReadUInt16();
+    }
+    var result = this._ReadElementData(type &amp; 0x3F);
+    if ((type &amp; Tw2ObjectReader.ID_BIT) != 0)
+    {
+        this._ids[id] = result;
+    }
+    return result;
+};
+
+Tw2ObjectReader.prototype.Construct = function()
+{
+    this._reader.cursor = this._start;
+    return this._ReadElement();
+};
+
+
+/**
+ * Construct
+ * @param initialize
+ * @returns {Function}
+ */
+/*Tw2ObjectReader.prototype.Construct = function(initialize)
+{
+    this._inputStack = [];
+    this._inputStack.push([this.xmlNode.documentElement, this, 'result']);
+    this._initializeObjects = [];
+    this._ids = [];
+    var self = this;
+    return function()
+    {
+        return self.ConstructFromNode(initialize, true);
+    };
+};
+*/
+
+
+/**
+ * ConstructFromNode
+ * @param initialize
+ * @param async
+ * @returns {Boolean}
+ */
+Tw2ObjectReader.prototype.ConstructFromNode = function(initialize, async)
+{
+    var now = new Date();
+    var startTime = now.getTime();
+    while (this._inputStack.length)
+    {
+        var endTime = now.getTime();
+        if (async &amp;&amp; resMan.prepareBudget &lt; (endTime - startTime) * 0.001)
+        {
+            return false;
+        }
+        var inputData = this._inputStack.pop();
+        var xmlNode = inputData[0];
+        var parent = inputData[1];
+        var index = inputData[2];
+        if (xmlNode == null)
+        {
+            if (initialize &amp;&amp; typeof(parent.Initialize) != 'undefined')
+            {
+                this._initializeObjects.push(parent);
+                //parent.Initialize();
+            }
+            continue;
+        }
+        var ref = xmlNode.attributes.getNamedItem('ref');
+        if (ref)
+        {
+            var object = this._ids[ref.value];
+            //this._inputStack.push([null, object, null]);
+            parent[index] = object;
+            continue;
+        }
+        var type = xmlNode.attributes.getNamedItem('type');
+        if (type)
+        {
+            var object = null;
+            if (type.value == 'dict')
+            {
+                object = {};
+            }
+            else
+            {
+                try
+                {
+                    object = eval("new " + type.value + "()");
+                }
+                catch (e)
+                {
+                    emitter.log('res.error',
+                    {
+                        log: 'throw',
+                        src: ['Tw2ObjectReader', 'ConstructFromNode'],
+                        msg: 'Object with undefined type',
+                        type: 'xml.type',
+                        value: type.value
+                    });
+
+                    throw new Error('YAML: object with undefined type \"' + type.value + '\"');
+                }
+            }
+            this._inputStack.push([null, object, null]);
+            for (var i = 0; i &lt; xmlNode.childNodes.length; ++i)
+            {
+                var child = xmlNode.childNodes[xmlNode.childNodes.length - 1 - i];
+                if (child.nodeName == '#text')
+                {
+                    continue;
+                }
+                if (type.value != 'dict')
+                {
+                    if (typeof(object[child.nodeName]) == 'undefined')
+                    {
+                        emitter.log('res.error',
+                        {
+                            log: 'warn',
+                            src: ['Tw2ObjectReader', 'ConstructFromNode'],
+                            msg: 'Object "' + type.value + '" missing property: ' + child.nodeName,
+                            value: child.nodeName,
+                            type: 'xml.property',
+                            value: child.nodeName
+                        });
+
+                        continue;
+                    }
+                }
+                this._inputStack.push([child, object, child.nodeName]);
+            }
+            var id = xmlNode.attributes.getNamedItem('id');
+            if (id)
+            {
+                this._ids[id.value] = object;
+            }
+            parent[index] = object;
+            continue;
+        }
+
+        var list = xmlNode.attributes.getNamedItem('list');
+        if (list)
+        {
+            object = [];
+            var arrayIndex = 0;
+            this._inputStack.push([null, object, null]);
+            for (var i = 0; i &lt; xmlNode.childNodes.length; ++i)
+            {
+                var child = xmlNode.childNodes[xmlNode.childNodes.length - 1 - i];
+                if (child.nodeName == '#text')
+                {
+                    continue;
+                }
+                arrayIndex++;
+            }
+            for (var i = 0; i &lt; xmlNode.childNodes.length; ++i)
+            {
+                var child = xmlNode.childNodes[xmlNode.childNodes.length - 1 - i];
+                if (child.nodeName == '#text')
+                {
+                    continue;
+                }
+                this._inputStack.push([child, object, --arrayIndex]);
+            }
+            var id = xmlNode.attributes.getNamedItem('id');
+            if (id)
+            {
+                this._ids[id.value] = object;
+            }
+            parent[index] = object;
+            continue;
+        }
+
+        var value = '';
+        for (var i = 0; i &lt; xmlNode.childNodes.length; ++i)
+        {
+            var child = xmlNode.childNodes[i];
+            if (child.nodeName == '#text')
+            {
+                value += child.data;
+            }
+        }
+
+        var json = xmlNode.attributes.getNamedItem('json');
+        if (json)
+        {
+            try
+            {
+                parent[index] = JSON.parse(value);
+            }
+            catch (e)
+            {
+                emitter.log('res.error',
+                {
+                    log: 'throw',
+                    src: ['Tw2ObjectReader', 'ConstructFromNode'],
+                    msg: 'Invalid JSON property',
+                    type: 'xml.json',
+                    value: value,
+                    data: e
+                });
+
+                throw new Error('YAML: property \"' + value + '\" is not a valid JSON property');
+            }
+            if (!xmlNode.attributes.getNamedItem('notnum'))
+            {
+                try
+                {
+                    parent[index] = new Float32Array(parent[index]);
+                }
+                catch (e)
+                {}
+            }
+            var id = xmlNode.attributes.getNamedItem('id');
+            if (id)
+            {
+                this._ids[id.value] = parent[index];
+            }
+            continue;
+        }
+
+        var capture = (/^(\-?\d+\.\d+(?:e|E\-?\d+)?)/).exec(value);
+        if (capture)
+        {
+            parent[index] = parseFloat(capture[1]);
+            continue;
+        }
+
+        capture = (/^(\-?\d+)/).exec(value);
+        if (capture)
+        {
+            parent[index] = parseInt(capture[1], 10);
+            continue;
+        }
+
+        capture = (/^\b(enabled|true|yes|on)\b/).exec(value);
+        if (capture)
+        {
+            parent[index] = true;
+            continue;
+        }
+
+        capture = (/^\b(disabled|false|no|off)\b/).exec(value);
+        if (capture)
+        {
+            parent[index] = false;
+            continue;
+        }
+
+        parent[index] = value;
+    }
+    while (this._initializeObjects.length)
+    {
+        var endTime = now.getTime();
+        if (async &amp;&amp; resMan.prepareBudget &lt; (endTime - startTime) * 0.001)
+        {
+            return false;
+        }
+        var object = this._initializeObjects.shift();
+        object.Initialize();
+    }
+    return true;
+};
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="EveBasicPerObjectData.html">EveBasicPerObjectData</a></li><li><a href="EveBasicPerObjectData_SetPerObjectDataToDevice.html">SetPerObjectDataToDevice</a></li><li><a href="EveBoosterBatch.html">EveBoosterBatch</a></li><li><a href="EveBoosterSet.html">EveBoosterSet</a></li><li><a href="EveBoosterSet_Add.html">Add</a></li><li><a href="EveBoosterSet_Update.html">Update</a></li><li><a href="EveChildBillboard.html">EveChildBillboard</a></li><li><a href="EveChildContainer.html">EveChildContainer</a></li><li><a href="EveChildExplosion.html">EveChildExplosion</a></li><li><a href="EveChildMesh.html">EveChildMesh</a></li><li><a href="EveChildParticleSystem.html">EveChildParticleSystem</a></li><li><a href="EveCurveLineSet.html">EveCurveLineSet</a></li><li><a href="EveEffectRoot.html">EveEffectRoot</a></li><li><a href="EveLensflare.html">EveLensflare</a></li><li><a href="EveLocator.html">EveLocator</a></li><li><a href="EveMeshOverlayEffect.html">EveMeshOverlayEffect</a></li><li><a href="EveMissile.html">EveMissile</a></li><li><a href="EveMissileWarhead.html">EveMissileWarhead</a></li><li><a href="EveOccluder.html">EveOccluder</a></li><li><a href="EvePlaneSet.html">EvePlaneSet</a></li><li><a href="EvePlaneSet_Render.html">Render</a></li><li><a href="EvePlaneSetBatch.html">EvePlaneSetBatch</a></li><li><a href="EvePlaneSetBatch_Commit.html">Commit</a></li><li><a href="EvePlaneSetItem.html">EvePlaneSetItem</a></li><li><a href="EvePlanet.html">EvePlanet</a></li><li><a href="EvePlanet_GetPlanetResources.html">GetPlanetResources</a></li><li><a href="EveShip.html">EveShip</a></li><li><a href="EveSpaceObject.html">EveSpaceObject</a></li><li><a href="EveSpaceObjectDecal.html">EveSpaceObjectDecal</a></li><li><a href="EveSpaceScene.html">EveSpaceScene</a></li><li><a href="EveSpotlightSet.html">EveSpotlightSet</a></li><li><a href="EveSpotlightSetBatch.html">EveSpotlightSetBatch</a></li><li><a href="EveSpotlightSetItem.html">EveSpotlightSetItem</a></li><li><a href="EveSpriteSet.html">EveSpriteSet</a></li><li><a href="EveSpriteSet_Add.html">Add</a></li><li><a href="EveSpriteSetBatch.html">EveSpriteSetBatch</a></li><li><a href="EveSpriteSetItem.html">EveSpriteSetItem</a></li><li><a href="EveStretch.html">EveStretch</a></li><li><a href="EveTransform.html">EveTransform</a></li><li><a href="EveTurretData.html">EveTurretData</a></li><li><a href="EveTurretSet.html">EveTurretSet</a></li><li><a href="EveTurretSet_UpdateViewDependentData.html">UpdateViewDependentData</a></li><li><a href="Tr2ParticleElement.html">Tr2ParticleElement</a></li><li><a href="Tw2Animation.html">Tw2Animation</a></li><li><a href="Tw2AnimationController_GetAnimation.html">GetAnimation</a></li><li><a href="Tw2AnimationController_GetPlayingAnimations.html">GetPlayingAnimations</a></li><li><a href="Tw2AnimationController_ResetAnimation.html">ResetAnimation</a></li><li><a href="Tw2BatchAccumulator.html">Tw2BatchAccumulator</a></li><li><a href="Tw2BinaryReader.html">Tw2BinaryReader</a></li><li><a href="Tw2BlendShapeData.html">Tw2BlendShapeData</a></li><li><a href="Tw2Bone.html">Tw2Bone</a></li><li><a href="Tw2ColorCurve.html">Tw2ColorCurve</a></li><li><a href="Tw2ColorCurve2.html">Tw2ColorCurve2</a></li><li><a href="Tw2ColorKey.html">Tw2ColorKey</a></li><li><a href="Tw2ColorKey2.html">Tw2ColorKey2</a></li><li><a href="Tw2ColorSequencer.html">Tw2ColorSequencer</a></li><li><a href="Tw2CurveSet.html">Tw2CurveSet</a></li><li><a href="Tw2Device.html">Tw2Device</a></li><li><a href="Tw2Device_SetStandardStates.html">SetStandardStates</a></li><li><a href="Tw2DynamicEmitter.html">Tw2DynamicEmitter</a></li><li><a href="Tw2Effect.html">Tw2Effect</a></li><li><a href="Tw2EffectRes.html">Tw2EffectRes</a></li><li><a href="Tw2EulerRotation.html">Tw2EulerRotation</a></li><li><a href="Tw2EventCurve.html">Tw2EventCurve</a></li><li><a href="Tw2EventKey.html">Tw2EventKey</a></li><li><a href="Tw2Float.html">Tw2Float</a></li><li><a href="Tw2FloatParameter.html">Tw2FloatParameter</a></li><li><a href="Tw2ForwardingRenderBatch.html">Tw2ForwardingRenderBatch</a></li><li><a href="Tw2Frustum.html">Tw2Frustum</a></li><li><a href="Tw2GeometryAnimation.html">Tw2GeometryAnimation</a></li><li><a href="Tw2GeometryBatch.html">Tw2GeometryBatch</a></li><li><a href="Tw2GeometryBone.html">Tw2GeometryBone</a></li><li><a href="Tw2GeometryCurve.html">Tw2GeometryCurve</a></li><li><a href="Tw2GeometryLineBatch.html">Tw2GeometryLineBatch</a></li><li><a href="Tw2GeometryMesh.html">Tw2GeometryMesh</a></li><li><a href="Tw2GeometryMeshArea.html">Tw2GeometryMeshArea</a></li><li><a href="Tw2GeometryMeshBinding.html">Tw2GeometryMeshBinding</a></li><li><a href="Tw2GeometryModel.html">Tw2GeometryModel</a></li><li><a href="Tw2GeometryModel_FindBoneByName.html">FindBoneByName</a></li><li><a href="Tw2GeometryRes.html">Tw2GeometryRes</a></li><li><a href="Tw2GeometrySkeleton.html">Tw2GeometrySkeleton</a></li><li><a href="Tw2GeometryTrackGroup.html">Tw2GeometryTrackGroup</a></li><li><a href="Tw2GeometryTransformTrack.html">Tw2GeometryTransformTrack</a></li><li><a href="Tw2InstancedMesh.html">Tw2InstancedMesh</a></li><li><a href="Tw2InstancedMeshBatch.html">Tw2InstancedMeshBatch</a></li><li><a href="Tw2LoadingObject.html">Tw2LoadingObject</a></li><li><a href="Tw2MatrixParameter.html">Tw2MatrixParameter</a></li><li><a href="Tw2MayaAnimationEngine.html">Tw2MayaAnimationEngine</a></li><li><a href="Tw2MayaEulerRotationCurve.html">Tw2MayaEulerRotationCurve</a></li><li><a href="Tw2MayaScalarCurve.html">Tw2MayaScalarCurve</a></li><li><a href="Tw2MayaVector3Curve.html">Tw2MayaVector3Curve</a></li><li><a href="Tw2Mesh.html">Tw2Mesh</a></li><li><a href="Tw2MeshArea.html">Tw2MeshArea</a></li><li><a href="Tw2MeshLineArea.html">Tw2MeshLineArea</a></li><li><a href="Tw2Model.html">Tw2Model</a></li><li><a href="Tw2MotherLode.html">Tw2MotherLode</a></li><li><a href="Tw2ObjectReader.html">Tw2ObjectReader</a></li><li><a href="Tw2ParticleAttractorForce.html">Tw2ParticleAttractorForce</a></li><li><a href="Tw2ParticleDirectForce.html">Tw2ParticleDirectForce</a></li><li><a href="Tw2ParticleDragForce.html">Tw2ParticleDragForce</a></li><li><a href="Tw2ParticleElementDeclaration.html">Tw2ParticleElementDeclaration</a></li><li><a href="Tw2ParticleFluidDragForce.html">Tw2ParticleFluidDragForce</a></li><li><a href="Tw2ParticleSpring.html">Tw2ParticleSpring</a></li><li><a href="Tw2ParticleSystem.html">Tw2ParticleSystem</a></li><li><a href="Tw2ParticleSystem_GetInstanceBuffer.html">GetInstanceBuffer</a></li><li><a href="Tw2ParticleTurbulenceForce.html">Tw2ParticleTurbulenceForce</a></li><li><a href="Tw2PerlinCurve.html">Tw2PerlinCurve</a></li><li><a href="Tw2PerObjectData.html">Tw2PerObjectData</a></li><li><a href="Tw2PerObjectData_SetPerObjectDataToDevice.html">SetPerObjectDataToDevice</a></li><li><a href="Tw2PostProcess.html">Tw2PostProcess</a></li><li><a href="Tw2QuaternionCurve.html">Tw2QuaternionCurve</a></li><li><a href="Tw2QuaternionKey.html">Tw2QuaternionKey</a></li><li><a href="Tw2QuaternionKey2.html">Tw2QuaternionKey2</a></li><li><a href="Tw2QuaternionSequencer.html">Tw2QuaternionSequencer</a></li><li><a href="Tw2RandomConstantCurve.html">Tw2RandomConstantCurve</a></li><li><a href="Tw2RandomIntegerAttributeGenerator.html">Tw2RandomIntegerAttributeGenerator</a></li><li><a href="Tw2RandomUniformAttributeGenerator.html">Tw2RandomUniformAttributeGenerator</a></li><li><a href="Tw2RawData.html">Tw2RawData</a></li><li><a href="Tw2RenderBatch.html">Tw2RenderBatch</a></li><li><a href="Tw2RenderTarget.html">Tw2RenderTarget</a></li><li><a href="Tw2ResMan.html">Tw2ResMan</a></li><li><a href="Tw2Resource.html">Tw2Resource</a></li><li><a href="Tw2RGBAScalarSequencer.html">Tw2RGBAScalarSequencer</a></li><li><a href="Tw2RigidOrientation.html">Tw2RigidOrientation</a></li><li><a href="Tw2RotationCurve.html">Tw2RotationCurve</a></li><li><a href="Tw2RuntimeInstanceData.html">Tw2RuntimeInstanceData</a></li><li><a href="Tw2RuntimeInstanceData_SetData.html">SetData</a></li><li><a href="Tw2RuntimeInstanceData_SetItemElement.html">SetItemElement</a></li><li><a href="Tw2RuntimeInstanceData_SetItemElementRef.html">SetItemElementRef</a></li><li><a href="Tw2SamplerOverride.html">Tw2SamplerOverride</a></li><li><a href="Tw2SamplerState.html">Tw2SamplerState</a></li><li><a href="Tw2ScalarCurve.html">Tw2ScalarCurve</a></li><li><a href="Tw2ScalarCurve2.html">Tw2ScalarCurve2</a></li><li><a href="Tw2ScalarKey.html">Tw2ScalarKey</a></li><li><a href="Tw2ScalarKey2.html">Tw2ScalarKey2</a></li><li><a href="Tw2ScalarSequencer.html">Tw2ScalarSequencer</a></li><li><a href="Tw2SineCurve.html">Tw2SineCurve</a></li><li><a href="Tw2SphereShapeAttributeGenerator.html">Tw2SphereShapeAttributeGenerator</a></li><li><a href="Tw2StaticEmitter.html">Tw2StaticEmitter</a></li><li><a href="Tw2TextureParameter.html">Tw2TextureParameter</a></li><li><a href="Tw2TextureParameter_SetTexturePath.html">SetTexturePath</a></li><li><a href="Tw2TextureRes.html">Tw2TextureRes</a></li><li><a href="Tw2TextureRes_Attach.html">Attach</a></li><li><a href="Tw2TextureRes_Bind.html">Bind</a></li><li><a href="Tw2TextureRes_Unload.html">Unload</a></li><li><a href="Tw2Torque.html">Tw2Torque</a></li><li><a href="Tw2Track.html">Tw2Track</a></li><li><a href="Tw2TrackGroup.html">Tw2TrackGroup</a></li><li><a href="Tw2TransformParameter.html">Tw2TransformParameter</a></li><li><a href="Tw2TransformParameter_Apply.html">Apply</a></li><li><a href="Tw2TransformTrack.html">Tw2TransformTrack</a></li><li><a href="Tw2ValueBinding.html">Tw2ValueBinding</a></li><li><a href="Tw2VariableParameter.html">Tw2VariableParameter</a></li><li><a href="Tw2VariableStore.html">Tw2VariableStore</a></li><li><a href="Tw2VariableStore_RegisterType.html">RegisterType</a></li><li><a href="Tw2VariableStore_RegisterVariable.html">RegisterVariable</a></li><li><a href="Tw2VariableStore_RegisterVariableWithType.html">RegisterVariableWithType</a></li><li><a href="Tw2Vector2Curve.html">Tw2Vector2Curve</a></li><li><a href="Tw2Vector2Key.html">Tw2Vector2Key</a></li><li><a href="Tw2Vector2Parameter.html">Tw2Vector2Parameter</a></li><li><a href="Tw2Vector3Curve.html">Tw2Vector3Curve</a></li><li><a href="Tw2Vector3Key.html">Tw2Vector3Key</a></li><li><a href="Tw2Vector3Parameter.html">Tw2Vector3Parameter</a></li><li><a href="Tw2Vector4Parameter.html">Tw2Vector4Parameter</a></li><li><a href="Tw2VectorCurve.html">Tw2VectorCurve</a></li><li><a href="Tw2VectorKey.html">Tw2VectorKey</a></li><li><a href="Tw2VectorSequencer.html">Tw2VectorSequencer</a></li><li><a href="Tw2VertexDeclaration.html">Tw2VertexDeclaration</a></li><li><a href="Tw2VertexElement.html">Tw2VertexElement</a></li><li><a href="Tw2WbgTrack.html">Tw2WbgTrack</a></li><li><a href="Tw2WbgTransformTrack.html">Tw2WbgTransformTrack</a></li><li><a href="Tw2XYZScalarSequencer.html">Tw2XYZScalarSequencer</a></li><li><a href="Tw2YPRSequencer.html">Tw2YPRSequencer</a></li></ul><h3>Global</h3><ul><li><a href="global.html#ag_horner1">ag_horner1</a></li><li><a href="global.html#ag_zeroin">ag_zeroin</a></li><li><a href="global.html#ag_zeroin2">ag_zeroin2</a></li><li><a href="global.html#emitter">emitter</a></li><li><a href="global.html#EveStation">EveStation</a></li><li><a href="global.html#EveTurretSetLocatorInfo">EveTurretSetLocatorInfo</a></li><li><a href="global.html#Inherit">Inherit</a></li><li><a href="global.html#Perlin_init">Perlin_init</a></li><li><a href="global.html#Perlin_noise1">Perlin_noise1</a></li><li><a href="global.html#PerlinNoise1D">PerlinNoise1D</a></li><li><a href="global.html#polyZeroes">polyZeroes</a></li><li><a href="global.html#Tw2AnimationController">Tw2AnimationController</a></li><li><a href="global.html#Tw2EventEmitter">Tw2EventEmitter</a></li><li><a href="global.html#vec3Hermite">vec3Hermite</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 3.4.3</a> on Sun May 07 2017 02:25:29 GMT-0400 (EDT)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

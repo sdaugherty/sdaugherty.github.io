@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: eve/EveTurretSet.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: eve/EveTurretSet.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/**
+ * EveTurretData
+ * @property {String} name
+ * @property {boolean} visible
+ * @property {mat4} localTransform
+ * @property {quat4} rotation
+ * @constructor
+ */
+function EveTurretData()
+{
+    this.name = '';
+    this.visible = true;
+    this.localTransform = mat4.create();
+    this.rotation = quat4.create();
+}
+
+/**
+ * EveTurretSet
+ * @property {boolean} display
+ * @property {string} name
+ * @property {quat4} boundingSphere
+ * @property {number} bottomClipHeight
+ * @property {string} locatorName
+ * @property {Tw2Effect} turretEffect
+ * @property {vec3} targetPosition
+ * @property {number} sysBoneHeight
+ * @property {string} firingEffectResPath
+ * @property {EveTurretFiringFx} firingEffect
+ * @property {boolean} hasCyclingFiringPos
+ * @property {string} geometryResPath
+ * @property {Tw2GeometryRes} geometryResource
+ * @property {Tw2AnimationController} activeAnimation
+ * @property {Tw2AnimationController} inactiveAnimation
+ * @property {mat4} parentMatrix
+ * @property {Array.&lt;EveTurretData>} turrets
+ * @property {number} STATE_INACTIVE
+ * @property {number} STATE_IDLE
+ * @property {number} STATE_FIRING
+ * @property {number} STATE_PACKING
+ * @property {number} STATE_UNPACKING
+ * @property {number} state
+
+ * @property {Tw2PerObjectData} _perObjectDataActive
+ * @property {Tw2PerObjectData} _perObjectDataInactive
+ * @property {Array.&lt;string>} worldNames
+ * @property {number} _activeTurret
+ * @property {number} _recheckTimeLeft
+ * @property {number} _currentCyclingFiresPos
+ * @constructor
+ */
+function EveTurretSet()
+{
+    this.display = true;
+    this.name = '';
+    this.boundingSphere = quat4.create();
+    this.bottomClipHeight = 0;
+    this.locatorName = '';
+    this.sysBoneHeight = 0;
+
+    this.turrets = [];
+    this.turretEffect = null;
+    this.targetPosition = vec3.create();
+    this.firingEffectResPath = '';
+    this.firingEffect = null;
+    this.fireCallback = null;
+    this.fireCallbackPending = false;
+
+    this.hasCyclingFiringPos = false;
+    this.geometryResPath = '';
+    this.geometryResource = null;
+
+    this.activeAnimation = new Tw2AnimationController();
+    this.inactiveAnimation = new Tw2AnimationController();
+
+    this.parentMatrix = mat4.identity(mat4.create());
+
+    this.STATE_INACTIVE = 0;
+    this.STATE_IDLE = 1;
+    this.STATE_FIRING = 2;
+    this.STATE_PACKING = 3;
+    this.STATE_UNPACKING = 4;
+
+    this.state = this.STATE_IDLE;
+
+    this._perObjectDataActive = new Tw2PerObjectData();
+    this._perObjectDataActive.perObjectVSData = new Tw2RawData();
+    this._perObjectDataActive.perObjectVSData.Declare('baseCutoffData', 4);
+    this._perObjectDataActive.perObjectVSData.Declare('turretSetData', 4);
+    this._perObjectDataActive.perObjectVSData.Declare('shipMatrix', 16);
+    this._perObjectDataActive.perObjectVSData.Declare('turretTranslation', 4 * 24);
+    this._perObjectDataActive.perObjectVSData.Declare('turretRotation', 4 * 24);
+    this._perObjectDataActive.perObjectVSData.Declare('turretPoseTransAndRot', 2 * 4 * 72);
+    this._perObjectDataActive.perObjectVSData.Create();
+
+    this._perObjectDataInactive = new Tw2PerObjectData();
+    this._perObjectDataInactive.perObjectVSData = new Tw2RawData();
+    this._perObjectDataInactive.perObjectVSData.Declare('baseCutoffData', 4);
+    this._perObjectDataInactive.perObjectVSData.Declare('turretSetData', 4);
+    this._perObjectDataInactive.perObjectVSData.Declare('shipMatrix', 16);
+    this._perObjectDataInactive.perObjectVSData.Declare('turretTranslation', 4 * 24);
+    this._perObjectDataInactive.perObjectVSData.Declare('turretRotation', 4 * 24);
+    this._perObjectDataInactive.perObjectVSData.Declare('turretPoseTransAndRot', 2 * 4 * 72);
+    this._perObjectDataInactive.perObjectVSData.Create();
+
+    this.worldNames = ['turretWorld0', 'turretWorld1', 'turretWorld2'];
+
+    this._activeTurret = -1;
+    this._recheckTimeLeft = 0;
+    this._currentCyclingFiresPos = 0;
+}
+
+/**
+ * Bone Skeleton Names
+ * @type {string[]}
+ */
+EveTurretSet.positionBoneSkeletonNames = [
+    "Pos_Fire01",
+    "Pos_Fire02",
+    "Pos_Fire03",
+    "Pos_Fire04",
+    "Pos_Fire05",
+    "Pos_Fire06",
+    "Pos_Fire07",
+    "Pos_Fire08"
+];
+
+/**
+ * Initializes the Turret Set
+ */
+EveTurretSet.prototype.Initialize = function()
+{
+    if (this.turretEffect &amp;&amp; this.geometryResPath != '')
+    {
+        this.geometryResource = resMan.GetResource(this.geometryResPath);
+        this.activeAnimation.SetGeometryResource(this.geometryResource);
+        this.inactiveAnimation.SetGeometryResource(this.geometryResource);
+        if (this.geometryResource)
+        {
+            this.geometryResource.RegisterNotification(this);
+        }
+    }
+    if (this.firingEffectResPath != '')
+    {
+        var self = this;
+        resMan.GetObject(this.firingEffectResPath, function(object)
+        {
+            self.firingEffect = object;
+        });
+    }
+};
+
+/**
+ * Gets turret set res objects
+ * @param {Array} [out=[]] - Optional receiving array
+ * @returns {Array.&lt;Tw2EffectRes|Tw2TextureRes|Tw2GeometryRes>} [out]
+ */
+EveTurretSet.prototype.GetResources = function(out)
+{
+    if (out === undefined)
+    {
+        out = [];
+    }
+
+    if (this.geometryResource !== null)
+    {
+        if (out.indexOf(this.geometryResource) === -1)
+        {
+            out.push(this.geometryResource);
+        }
+    }
+
+    if (this.turretEffect !== null)
+    {
+        this.turretEffect.GetResources(out);
+    }
+
+    if (this.firingEffect !== null)
+    {
+        this.firingEffect.GetResources(out);
+    }
+
+    return out;
+}
+
+/**
+ * Rebuilds the turret sets cached data
+ */
+EveTurretSet.prototype.RebuildCachedData = function()
+{
+    var instancedElement = new Tw2VertexElement(Tw2VertexDeclaration.DECL_TEXCOORD, 1, device.gl.FLOAT, 2);
+    for (var i = 0; i &lt; this.geometryResource.meshes.length; ++i)
+    {
+        this.geometryResource.meshes[i].declaration.elements.push(instancedElement);
+        this.geometryResource.meshes[i].declaration.RebuildHash();
+    }
+    var self = this;
+    switch (this.state)
+    {
+        case this.STATE_INACTIVE:
+            this.activeAnimation.PlayAnimation("Inactive", true);
+            this.inactiveAnimation.PlayAnimation("Inactive", true);
+            break;
+        case this.STATE_IDLE:
+            this.activeAnimation.PlayAnimation("Active", true);
+            this.inactiveAnimation.PlayAnimation("Active", true);
+            break;
+        case this.STATE_FIRING:
+            this.activeAnimation.PlayAnimation("Fire", false, function()
+            {
+                self.activeAnimation.PlayAnimation("Active", true);
+            });
+            this.inactiveAnimation.PlayAnimation("Active", true);
+            break;
+        case this.STATE_PACKING:
+            this.EnterStateIdle();
+            break;
+        case this.STATE_UNPACKING:
+            this.EnterStateDeactive();
+            break;
+    }
+};
+
+/**
+ * Initializes turret set firing effect
+ */
+EveTurretSet.prototype.InitializeFiringEffect = function()
+{
+    if (!this.firingEffect)
+    {
+        return;
+    }
+    if (this.geometryResource &amp;&amp; this.geometryResource.models.length)
+    {
+        var model = this.geometryResource.models[0];
+        for (var i = 0; i &lt; this.firingEffect.GetPerMuzzleEffectCount(); ++i)
+        {
+            this.firingEffect.SetMuzzleBoneID(i, model.FindBoneByName(EveTurretSet.positionBoneSkeletonNames[i]));
+        }
+    }
+};
+
+/**
+ * Sets the local transform for a specific turret index
+ * @param {number} index
+ * @param {mat4} localTransform
+ * @param {String} locatorName
+ */
+EveTurretSet.prototype.SetLocalTransform = function(index, localTransform, locatorName)
+{
+    var transform = mat4.create(localTransform);
+    vec3.normalize(transform.subarray(0, 3));
+    vec3.normalize(transform.subarray(4, 7));
+    vec3.normalize(transform.subarray(8, 11));
+    if (index >= this.turrets.length)
+    {
+        var data = new EveTurretData();
+        data.name = locatorName;
+        data.localTransform.set(transform);
+        this.turrets[index] = data;
+    }
+    else
+    {
+        this.turrets[index].localTransform.set(transform);
+    }
+    mat4toquat(this.turrets[index].localTransform, this.turrets[index].rotation);
+};
+
+function mat3x4toquat(mm, index, out, outIndex)
+{
+    index *= 12;
+    outIndex *= 4;
+    var m = mat3x4toquat._tempMat;
+    m[0] = mm[index + 0];
+    m[1] = mm[index + 4];
+    m[2] = mm[index + 8];
+    m[3] = 0;
+    m[4] = mm[index + 1];
+    m[5] = mm[index + 5];
+    m[6] = mm[index + 9];
+    m[7] = 0;
+    m[8] = mm[index + 2];
+    m[9] = mm[index + 6];
+    m[10] = mm[index + 10];
+    m[11] = 0;
+    m[12] = mm[index + 3];
+    m[13] = mm[index + 7];
+    m[14] = mm[index + 11];
+    m[15] = 1;
+    var q = mat3x4toquat._tempQuat;
+    mat4toquat(m, q);
+    out[outIndex] = q[0];
+    out[outIndex + 1] = q[1];
+    out[outIndex + 2] = q[2];
+    out[outIndex + 3] = q[3];
+}
+
+mat3x4toquat._tempMat = mat4.create();
+mat3x4toquat._tempQuat = quat4.create();
+
+
+function mat4toquat(m, out)
+{
+    out = out || quat4.create();
+    var trace = m[0] + m[5] + m[10] + 1.0;
+    if (trace > 1.0)
+    {
+        out[0] = (m[6] - m[9]) / (2.0 * Math.sqrt(trace));
+        out[1] = (m[8] - m[2]) / (2.0 * Math.sqrt(trace));
+        out[2] = (m[1] - m[4]) / (2.0 * Math.sqrt(trace));
+        out[3] = Math.sqrt(trace) / 2.0;
+        return out;
+    }
+    var maxi = 0;
+    var maxdiag = m[0];
+    for (var i = 1; i &lt; 3; i++)
+    {
+        if (m[i * 4 + i] > maxdiag)
+        {
+            maxi = i;
+            maxdiag = m[i * 4 + i];
+        }
+    }
+    var S;
+    switch (maxi)
+    {
+        case 0:
+            S = 2.0 * Math.sqrt(1.0 + m[0] - m[5] - m[10]);
+            out[0] = 0.25 * S;
+            out[1] = (m[1] + m[4]) / S;
+            out[2] = (m[2] + m[8]) / S;
+            out[3] = (m[6] - m[9]) / S;
+            break;
+        case 1:
+            S = 2.0 * Math.sqrt(1.0 + m[5] - m[0] - m[10]);
+            out[0] = (m[1] + m[4]) / S;
+            out[1] = 0.25 * S;
+            out[2] = (m[6] + m[9]) / S;
+            out[3] = (m[8] - m[2]) / S;
+            break;
+        case 2:
+            S = 2.0 * Math.sqrt(1.0 + m[10] - m[0] - m[5]);
+            out[0] = (m[2] + m[8]) / S;
+            out[1] = (m[6] + m[9]) / S;
+            out[2] = 0.25 * S;
+            out[3] = (m[1] - m[4]) / S;
+            break;
+    }
+    return out;
+}
+
+/**
+ * Updates per object data
+ * @param {Tw2PerObjectData} perObjectData
+ * @param transforms
+ * @private
+ */
+EveTurretSet.prototype._UpdatePerObjectData = function(perObjectData, transforms)
+{
+    mat4.transpose(this.parentMatrix, perObjectData.Get('shipMatrix'));
+    var transformCount = transforms.length / 12;
+    perObjectData.Get('turretSetData')[0] = transformCount;
+    perObjectData.Get('baseCutoffData')[0] = this.bottomClipHeight;
+    var translation = perObjectData.Get('turretTranslation');
+    var rotation = perObjectData.Get('turretRotation');
+    var pose = perObjectData.Get('turretPoseTransAndRot');
+    for (var i = 0; i &lt; this.turrets.length; ++i)
+    {
+        for (var j = 0; j &lt; transformCount; ++j)
+        {
+            pose[(i * transformCount + j) * 2 * 4] = transforms[j * 12 + 3];
+            pose[(i * transformCount + j) * 2 * 4 + 1] = transforms[j * 12 + 7];
+            pose[(i * transformCount + j) * 2 * 4 + 2] = transforms[j * 12 + 11];
+            pose[(i * transformCount + j) * 2 * 4 + 3] = 1;
+            mat3x4toquat(transforms, j, pose, (i * transformCount + j) * 2 + 1);
+        }
+        translation[i * 4] = this.turrets[i].localTransform[12];
+        translation[i * 4 + 1] = this.turrets[i].localTransform[13];
+        translation[i * 4 + 2] = this.turrets[i].localTransform[14];
+        translation[i * 4 + 3] = 1;
+        rotation[i * 4] = this.turrets[i].rotation[0];
+        rotation[i * 4 + 1] = this.turrets[i].rotation[1];
+        rotation[i * 4 + 2] = this.turrets[i].rotation[2];
+        rotation[i * 4 + 3] = this.turrets[i].rotation[3];
+    }
+};
+
+/**
+ * Gets turret set render batches
+ * @param {RenderMode} mode
+ * @param {Tw2BatchAccumulator} accumulator
+ * @param {Tw2PerObjectData} perObjectData
+ * @returns {boolean}
+ */
+EveTurretSet.prototype.GetBatches = function(mode, accumulator, perObjectData)
+{
+    if (!this.turretEffect || this.geometryResource == null || !this.display)
+    {
+        return false;
+    }
+    if (mode == device.RM_OPAQUE)
+    {
+        var transforms = this.inactiveAnimation.GetBoneMatrices(0);
+        if (transforms.length == 0)
+        {
+            return true;
+        }
+        this._UpdatePerObjectData(this._perObjectDataInactive.perObjectVSData, transforms);
+        this._perObjectDataInactive.perObjectPSData = perObjectData.perObjectPSData;
+
+        var batch = new Tw2ForwardingRenderBatch();
+        batch.renderMode = mode;
+        batch.renderActive = false;
+        batch.perObjectData = this._perObjectDataInactive;
+        batch.geometryProvider = this;
+        accumulator.Commit(batch);
+
+        if (this.state == this.STATE_FIRING)
+        {
+            transforms = this.activeAnimation.GetBoneMatrices(0);
+            if (transforms.length == 0)
+            {
+                return true;
+            }
+            this._UpdatePerObjectData(this._perObjectDataActive.perObjectVSData, transforms);
+            this._perObjectDataActive.perObjectPSData = perObjectData.perObjectPSData;
+
+            batch = new Tw2ForwardingRenderBatch();
+            batch.renderActive = true;
+            batch.perObjectData = this._perObjectDataActive;
+            batch.geometryProvider = this;
+            accumulator.Commit(batch);
+        }
+    }
+    if (this.firingEffect)
+    {
+        this.firingEffect.GetBatches(mode, accumulator, perObjectData);
+    }
+    return true;
+};
+
+/**
+ * Per frame update
+ * @param {number} dt - Delta Time
+ * @param {mat4} parentMatrix
+ */
+EveTurretSet.prototype.Update = function(dt, parentMatrix)
+{
+    if (this.turretEffect)
+    {
+        this.activeAnimation.Update(dt);
+        this.inactiveAnimation.Update(dt);
+    }
+    mat4.set(parentMatrix, this.parentMatrix);
+    if (this.firingEffect)
+    {
+        if (this._activeTurret != -1)
+        {
+            if (this.firingEffect.isLoopFiring)
+            {
+                if (this.state == this.STATE_FIRING)
+                {
+                    this._recheckTimeLeft -= dt;
+                    if (this._recheckTimeLeft &lt;= 0)
+                    {
+                        this._DoStartFiring();
+                    }
+                }
+            }
+            var i;
+            if (this.activeAnimation.models.length)
+            {
+                var bones = this.activeAnimation.models[0].bonesByName;
+                for (i = 0; i &lt; this.firingEffect.GetPerMuzzleEffectCount(); ++i)
+                {
+                    var transform = bones[EveTurretSet.positionBoneSkeletonNames[i]].worldTransform;
+                    var out = this.firingEffect.GetMuzzleTransform(i);
+                    mat4.multiply(parentMatrix, mat4.multiply(this.turrets[this._activeTurret].localTransform, transform, out), out);
+                }
+            }
+            else
+            {
+                for (i = 0; i &lt; this.firingEffect.GetPerMuzzleEffectCount(); ++i)
+                {
+                    mat4.multiply(parentMatrix, this.turrets[this._activeTurret].localTransform, this.firingEffect.GetMuzzleTransform(i));
+                }
+            }
+            if (this.fireCallbackPending)
+            {
+                if (this.fireCallback)
+                {
+                    var cbTransforms = [];
+                    for (i = 0; i &lt; this.firingEffect.GetPerMuzzleEffectCount(); ++i)
+                    {
+                        cbTransforms.push(this.firingEffect.GetMuzzleTransform(i));
+                    }
+                    this.fireCallback(this, cbTransforms);
+                }
+                this.fireCallbackPending = false;
+            }
+        }
+
+        vec3.set(this.targetPosition, this.firingEffect.endPosition);
+        this.firingEffect.Update(dt);
+    }
+};
+
+/**
+ * Renders the turret set
+ * @param batch
+ * @param {Tw2Effect} overrideEffect
+ */
+EveTurretSet.prototype.Render = function(batch, overrideEffect)
+{
+    var effect = (!overrideEffect) ? this.turretEffect : overrideEffect;
+    var index = 0;
+    var customSetter = function(el)
+    {
+        device.gl.disableVertexAttribArray(el.location);
+        device.gl.vertexAttrib2f(el.location, index, index);
+    };
+    for (var i = 0; i &lt; this.geometryResource.meshes.length; ++i)
+    {
+        var decl = this.geometryResource.meshes[i].declaration;
+        decl.FindUsage(Tw2VertexDeclaration.DECL_TEXCOORD, 1).customSetter = customSetter;
+    }
+    for (; index &lt; this.turrets.length; ++index)
+    {
+        if (this.turrets[index].visible)
+        {
+            var isActive = this.state == this.STATE_FIRING &amp;&amp; index == this._activeTurret;
+            if (batch.renderActive == isActive)
+            {
+                this.geometryResource.RenderAreas(0, 0, 1, effect);
+            }
+        }
+    }
+};
+
+/**
+ * Animation helper function for deactivating a turret set
+ */
+EveTurretSet.prototype.EnterStateDeactive = function()
+{
+    if (this.state == this.STATE_INACTIVE || this.state == this.STATE_PACKING)
+    {
+        return;
+    }
+    var self = this;
+    if (this.turretEffect)
+    {
+        this.activeAnimation.StopAllAnimations();
+        this.inactiveAnimation.StopAllAnimations();
+        this.activeAnimation.PlayAnimation("Pack", false, function()
+        {
+            self.state = self.STATE_INACTIVE;
+            self.activeAnimation.PlayAnimation("Inactive", true);
+        });
+        this.inactiveAnimation.PlayAnimation("Pack", false, function()
+        {
+            self.state = self.STATE_INACTIVE;
+            self.inactiveAnimation.PlayAnimation("Inactive", true);
+        });
+        this.state = this.STATE_PACKING;
+    }
+    else
+    {
+        this.state = self.STATE_INACTIVE;
+    }
+    this._activeTurret = -1;
+    if (this.firingEffect)
+    {
+        this.firingEffect.StopFiring();
+    }
+};
+
+/**
+ * Animation helper function for putting a turret set into idle state
+ */
+EveTurretSet.prototype.EnterStateIdle = function()
+{
+    var self = this;
+    if (this.state == this.STATE_IDLE || this.state == this.STATE_UNPACKING)
+    {
+        return;
+    }
+    if (this.turretEffect)
+    {
+        this.activeAnimation.StopAllAnimations();
+        this.inactiveAnimation.StopAllAnimations();
+        if (this.state == this.STATE_FIRING)
+        {
+            this.activeAnimation.PlayAnimation("Active", true);
+            this.inactiveAnimation.PlayAnimation("Active", true);
+        }
+        else
+        {
+            this.activeAnimation.PlayAnimation("Deploy", false, function()
+            {
+                self.state = self.STATE_IDLE;
+                self.activeAnimation.PlayAnimation("Active", true);
+            });
+            this.inactiveAnimation.PlayAnimation("Deploy", false, function()
+            {
+                self.state = self.STATE_IDLE;
+                self.inactiveAnimation.PlayAnimation("Active", true);
+            });
+        }
+        this.state = this.STATE_UNPACKING;
+    }
+    else
+    {
+        this.state = self.STATE_IDLE;
+    }
+    this._activeTurret = -1;
+    if (this.firingEffect)
+    {
+        this.firingEffect.StopFiring();
+    }
+};
+
+/**
+ * Animation helper function for putting a turret set into a firing state
+ */
+EveTurretSet.prototype.EnterStateFiring = function()
+{
+    var self = this;
+
+    if (!this.turretEffect || this.state == this.STATE_FIRING)
+    {
+        this._DoStartFiring();
+        if (this.turretEffect)
+        {
+            this.activeAnimation.PlayAnimation("Fire", false, function()
+            {
+                self.activeAnimation.PlayAnimation("Active", true);
+            });
+        }
+        return;
+    }
+    this.activeAnimation.StopAllAnimations();
+    this.inactiveAnimation.StopAllAnimations();
+    if (this.state == this.STATE_INACTIVE)
+    {
+        this.activeAnimation.PlayAnimation("Deploy", false, function()
+        {
+            self._DoStartFiring();
+            self.activeAnimation.PlayAnimation("Fire", false, function()
+            {
+                self.activeAnimation.PlayAnimation("Active", true);
+            });
+        });
+        this.inactiveAnimation.PlayAnimation("Deploy", false, function()
+        {
+            self.inactiveAnimation.PlayAnimation("Active", true);
+        });
+        this.state = this.STATE_UNPACKING;
+    }
+    else
+    {
+        this._DoStartFiring();
+        this.activeAnimation.PlayAnimation("Fire", false, function()
+        {
+            self.activeAnimation.PlayAnimation("Active", true);
+        });
+        this.inactiveAnimation.PlayAnimation("Active", true);
+    }
+};
+
+/**
+ * Updates view dependent data
+ * @constructor
+ */
+EveTurretSet.prototype.UpdateViewDependentData = function()
+{
+    if (this.firingEffect)
+    {
+        this.firingEffect.UpdateViewDependentData();
+    }
+}
+
+/**
+ * Animation helper function for turret firing
+ * @private
+ */
+EveTurretSet.prototype._DoStartFiring = function()
+{
+    if (this.hasCyclingFiringPos)
+    {
+        this._currentCyclingFiresPos = 1 - this._currentCyclingFiresPos;
+    }
+    var turret = this.GetClosestTurret();
+    if (this.firingEffect)
+    {
+        this.firingEffect.PrepareFiring(0, this.hasCyclingFiringPos ? this._currentCyclingFiresPos : -1);
+    }
+    this._activeTurret = turret;
+    this.state = this.STATE_FIRING;
+    this._recheckTimeLeft = 2;
+
+    if (this.fireCallback)
+    {
+        this.fireCallbackPending = true;
+    }
+};
+
+EveTurretSet._tempVec3 = [vec3.create(), vec3.create()];
+EveTurretSet._tempQuat4 = [quat4.create(), quat4.create()];
+
+/**
+ * Helper function for finding out what turret should be firing
+ * @returns {number}
+ */
+EveTurretSet.prototype.GetClosestTurret = function()
+{
+    var closestTurret = -1;
+    var closestAngle = -2;
+    var nrmToTarget = EveTurretSet._tempVec3[0];
+    var nrmUp = EveTurretSet._tempQuat4[0];
+    var turretPosition = EveTurretSet._tempQuat4[1];
+    for (var i = 0; i &lt; this.turrets.length; ++i)
+    {
+        turretPosition[0] = this.turrets[i].localTransform[12];
+        turretPosition[1] = this.turrets[i].localTransform[13];
+        turretPosition[2] = this.turrets[i].localTransform[14];
+        turretPosition[3] = 1;
+        mat4.multiplyVec4(this.parentMatrix, turretPosition);
+        vec3.normalize(vec3.subtract(this.targetPosition, turretPosition, nrmToTarget));
+        nrmUp[0] = 0;
+        nrmUp[1] = 1;
+        nrmUp[2] = 0;
+        nrmUp[3] = 0;
+        mat4.multiplyVec4(this.turrets[i].localTransform, nrmUp);
+        mat4.multiplyVec4(this.parentMatrix, nrmUp);
+        var angle = vec3.dot(nrmUp, nrmToTarget);
+        if (angle > closestAngle)
+        {
+            closestTurret = i;
+            closestAngle = angle;
+        }
+    }
+    return closestTurret;
+}
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Classes</h3><ul><li><a href="EveBasicPerObjectData.html">EveBasicPerObjectData</a></li><li><a href="EveBasicPerObjectData_SetPerObjectDataToDevice.html">SetPerObjectDataToDevice</a></li><li><a href="EveBoosterBatch.html">EveBoosterBatch</a></li><li><a href="EveBoosterSet.html">EveBoosterSet</a></li><li><a href="EveBoosterSet_Add.html">Add</a></li><li><a href="EveBoosterSet_Update.html">Update</a></li><li><a href="EveChildBillboard.html">EveChildBillboard</a></li><li><a href="EveChildContainer.html">EveChildContainer</a></li><li><a href="EveChildExplosion.html">EveChildExplosion</a></li><li><a href="EveChildMesh.html">EveChildMesh</a></li><li><a href="EveChildParticleSystem.html">EveChildParticleSystem</a></li><li><a href="EveCurveLineSet.html">EveCurveLineSet</a></li><li><a href="EveEffectRoot.html">EveEffectRoot</a></li><li><a href="EveLensflare.html">EveLensflare</a></li><li><a href="EveLocator.html">EveLocator</a></li><li><a href="EveMeshOverlayEffect.html">EveMeshOverlayEffect</a></li><li><a href="EveMissile.html">EveMissile</a></li><li><a href="EveMissileWarhead.html">EveMissileWarhead</a></li><li><a href="EveOccluder.html">EveOccluder</a></li><li><a href="EvePlaneSet.html">EvePlaneSet</a></li><li><a href="EvePlaneSet_Render.html">Render</a></li><li><a href="EvePlaneSetBatch.html">EvePlaneSetBatch</a></li><li><a href="EvePlaneSetBatch_Commit.html">Commit</a></li><li><a href="EvePlaneSetItem.html">EvePlaneSetItem</a></li><li><a href="EvePlanet.html">EvePlanet</a></li><li><a href="EvePlanet_GetPlanetResources.html">GetPlanetResources</a></li><li><a href="EveShip.html">EveShip</a></li><li><a href="EveSpaceObject.html">EveSpaceObject</a></li><li><a href="EveSpaceObjectDecal.html">EveSpaceObjectDecal</a></li><li><a href="EveSpaceScene.html">EveSpaceScene</a></li><li><a href="EveSpotlightSet.html">EveSpotlightSet</a></li><li><a href="EveSpotlightSetBatch.html">EveSpotlightSetBatch</a></li><li><a href="EveSpotlightSetItem.html">EveSpotlightSetItem</a></li><li><a href="EveSpriteSet.html">EveSpriteSet</a></li><li><a href="EveSpriteSet_Add.html">Add</a></li><li><a href="EveSpriteSetBatch.html">EveSpriteSetBatch</a></li><li><a href="EveSpriteSetItem.html">EveSpriteSetItem</a></li><li><a href="EveStretch.html">EveStretch</a></li><li><a href="EveTransform.html">EveTransform</a></li><li><a href="EveTurretData.html">EveTurretData</a></li><li><a href="EveTurretSet.html">EveTurretSet</a></li><li><a href="EveTurretSet_UpdateViewDependentData.html">UpdateViewDependentData</a></li><li><a href="Tr2ParticleElement.html">Tr2ParticleElement</a></li><li><a href="Tw2Animation.html">Tw2Animation</a></li><li><a href="Tw2AnimationController_GetAnimation.html">GetAnimation</a></li><li><a href="Tw2AnimationController_GetPlayingAnimations.html">GetPlayingAnimations</a></li><li><a href="Tw2AnimationController_ResetAnimation.html">ResetAnimation</a></li><li><a href="Tw2BatchAccumulator.html">Tw2BatchAccumulator</a></li><li><a href="Tw2BinaryReader.html">Tw2BinaryReader</a></li><li><a href="Tw2BlendShapeData.html">Tw2BlendShapeData</a></li><li><a href="Tw2Bone.html">Tw2Bone</a></li><li><a href="Tw2ColorCurve.html">Tw2ColorCurve</a></li><li><a href="Tw2ColorCurve2.html">Tw2ColorCurve2</a></li><li><a href="Tw2ColorKey.html">Tw2ColorKey</a></li><li><a href="Tw2ColorKey2.html">Tw2ColorKey2</a></li><li><a href="Tw2ColorSequencer.html">Tw2ColorSequencer</a></li><li><a href="Tw2CurveSet.html">Tw2CurveSet</a></li><li><a href="Tw2Device.html">Tw2Device</a></li><li><a href="Tw2Device_SetStandardStates.html">SetStandardStates</a></li><li><a href="Tw2DynamicEmitter.html">Tw2DynamicEmitter</a></li><li><a href="Tw2Effect.html">Tw2Effect</a></li><li><a href="Tw2EffectRes.html">Tw2EffectRes</a></li><li><a href="Tw2EulerRotation.html">Tw2EulerRotation</a></li><li><a href="Tw2EventCurve.html">Tw2EventCurve</a></li><li><a href="Tw2EventKey.html">Tw2EventKey</a></li><li><a href="Tw2Float.html">Tw2Float</a></li><li><a href="Tw2FloatParameter.html">Tw2FloatParameter</a></li><li><a href="Tw2ForwardingRenderBatch.html">Tw2ForwardingRenderBatch</a></li><li><a href="Tw2Frustum.html">Tw2Frustum</a></li><li><a href="Tw2GeometryAnimation.html">Tw2GeometryAnimation</a></li><li><a href="Tw2GeometryBatch.html">Tw2GeometryBatch</a></li><li><a href="Tw2GeometryBone.html">Tw2GeometryBone</a></li><li><a href="Tw2GeometryCurve.html">Tw2GeometryCurve</a></li><li><a href="Tw2GeometryLineBatch.html">Tw2GeometryLineBatch</a></li><li><a href="Tw2GeometryMesh.html">Tw2GeometryMesh</a></li><li><a href="Tw2GeometryMeshArea.html">Tw2GeometryMeshArea</a></li><li><a href="Tw2GeometryMeshBinding.html">Tw2GeometryMeshBinding</a></li><li><a href="Tw2GeometryModel.html">Tw2GeometryModel</a></li><li><a href="Tw2GeometryModel_FindBoneByName.html">FindBoneByName</a></li><li><a href="Tw2GeometryRes.html">Tw2GeometryRes</a></li><li><a href="Tw2GeometrySkeleton.html">Tw2GeometrySkeleton</a></li><li><a href="Tw2GeometryTrackGroup.html">Tw2GeometryTrackGroup</a></li><li><a href="Tw2GeometryTransformTrack.html">Tw2GeometryTransformTrack</a></li><li><a href="Tw2InstancedMesh.html">Tw2InstancedMesh</a></li><li><a href="Tw2InstancedMeshBatch.html">Tw2InstancedMeshBatch</a></li><li><a href="Tw2LoadingObject.html">Tw2LoadingObject</a></li><li><a href="Tw2MatrixParameter.html">Tw2MatrixParameter</a></li><li><a href="Tw2MayaAnimationEngine.html">Tw2MayaAnimationEngine</a></li><li><a href="Tw2MayaEulerRotationCurve.html">Tw2MayaEulerRotationCurve</a></li><li><a href="Tw2MayaScalarCurve.html">Tw2MayaScalarCurve</a></li><li><a href="Tw2MayaVector3Curve.html">Tw2MayaVector3Curve</a></li><li><a href="Tw2Mesh.html">Tw2Mesh</a></li><li><a href="Tw2MeshArea.html">Tw2MeshArea</a></li><li><a href="Tw2MeshLineArea.html">Tw2MeshLineArea</a></li><li><a href="Tw2Model.html">Tw2Model</a></li><li><a href="Tw2MotherLode.html">Tw2MotherLode</a></li><li><a href="Tw2ObjectReader.html">Tw2ObjectReader</a></li><li><a href="Tw2ParticleAttractorForce.html">Tw2ParticleAttractorForce</a></li><li><a href="Tw2ParticleDirectForce.html">Tw2ParticleDirectForce</a></li><li><a href="Tw2ParticleDragForce.html">Tw2ParticleDragForce</a></li><li><a href="Tw2ParticleElementDeclaration.html">Tw2ParticleElementDeclaration</a></li><li><a href="Tw2ParticleFluidDragForce.html">Tw2ParticleFluidDragForce</a></li><li><a href="Tw2ParticleSpring.html">Tw2ParticleSpring</a></li><li><a href="Tw2ParticleSystem.html">Tw2ParticleSystem</a></li><li><a href="Tw2ParticleSystem_GetInstanceBuffer.html">GetInstanceBuffer</a></li><li><a href="Tw2ParticleTurbulenceForce.html">Tw2ParticleTurbulenceForce</a></li><li><a href="Tw2PerlinCurve.html">Tw2PerlinCurve</a></li><li><a href="Tw2PerObjectData.html">Tw2PerObjectData</a></li><li><a href="Tw2PerObjectData_SetPerObjectDataToDevice.html">SetPerObjectDataToDevice</a></li><li><a href="Tw2PostProcess.html">Tw2PostProcess</a></li><li><a href="Tw2QuaternionCurve.html">Tw2QuaternionCurve</a></li><li><a href="Tw2QuaternionKey.html">Tw2QuaternionKey</a></li><li><a href="Tw2QuaternionKey2.html">Tw2QuaternionKey2</a></li><li><a href="Tw2QuaternionSequencer.html">Tw2QuaternionSequencer</a></li><li><a href="Tw2RandomConstantCurve.html">Tw2RandomConstantCurve</a></li><li><a href="Tw2RandomIntegerAttributeGenerator.html">Tw2RandomIntegerAttributeGenerator</a></li><li><a href="Tw2RandomUniformAttributeGenerator.html">Tw2RandomUniformAttributeGenerator</a></li><li><a href="Tw2RawData.html">Tw2RawData</a></li><li><a href="Tw2RenderBatch.html">Tw2RenderBatch</a></li><li><a href="Tw2RenderTarget.html">Tw2RenderTarget</a></li><li><a href="Tw2ResMan.html">Tw2ResMan</a></li><li><a href="Tw2Resource.html">Tw2Resource</a></li><li><a href="Tw2RGBAScalarSequencer.html">Tw2RGBAScalarSequencer</a></li><li><a href="Tw2RigidOrientation.html">Tw2RigidOrientation</a></li><li><a href="Tw2RotationCurve.html">Tw2RotationCurve</a></li><li><a href="Tw2RuntimeInstanceData.html">Tw2RuntimeInstanceData</a></li><li><a href="Tw2RuntimeInstanceData_SetData.html">SetData</a></li><li><a href="Tw2RuntimeInstanceData_SetItemElement.html">SetItemElement</a></li><li><a href="Tw2RuntimeInstanceData_SetItemElementRef.html">SetItemElementRef</a></li><li><a href="Tw2SamplerOverride.html">Tw2SamplerOverride</a></li><li><a href="Tw2SamplerState.html">Tw2SamplerState</a></li><li><a href="Tw2ScalarCurve.html">Tw2ScalarCurve</a></li><li><a href="Tw2ScalarCurve2.html">Tw2ScalarCurve2</a></li><li><a href="Tw2ScalarKey.html">Tw2ScalarKey</a></li><li><a href="Tw2ScalarKey2.html">Tw2ScalarKey2</a></li><li><a href="Tw2ScalarSequencer.html">Tw2ScalarSequencer</a></li><li><a href="Tw2SineCurve.html">Tw2SineCurve</a></li><li><a href="Tw2SphereShapeAttributeGenerator.html">Tw2SphereShapeAttributeGenerator</a></li><li><a href="Tw2StaticEmitter.html">Tw2StaticEmitter</a></li><li><a href="Tw2TextureParameter.html">Tw2TextureParameter</a></li><li><a href="Tw2TextureParameter_SetTexturePath.html">SetTexturePath</a></li><li><a href="Tw2TextureRes.html">Tw2TextureRes</a></li><li><a href="Tw2TextureRes_Attach.html">Attach</a></li><li><a href="Tw2TextureRes_Bind.html">Bind</a></li><li><a href="Tw2TextureRes_Unload.html">Unload</a></li><li><a href="Tw2Torque.html">Tw2Torque</a></li><li><a href="Tw2Track.html">Tw2Track</a></li><li><a href="Tw2TrackGroup.html">Tw2TrackGroup</a></li><li><a href="Tw2TransformParameter.html">Tw2TransformParameter</a></li><li><a href="Tw2TransformParameter_Apply.html">Apply</a></li><li><a href="Tw2TransformTrack.html">Tw2TransformTrack</a></li><li><a href="Tw2ValueBinding.html">Tw2ValueBinding</a></li><li><a href="Tw2VariableParameter.html">Tw2VariableParameter</a></li><li><a href="Tw2VariableStore.html">Tw2VariableStore</a></li><li><a href="Tw2VariableStore_RegisterType.html">RegisterType</a></li><li><a href="Tw2VariableStore_RegisterVariable.html">RegisterVariable</a></li><li><a href="Tw2VariableStore_RegisterVariableWithType.html">RegisterVariableWithType</a></li><li><a href="Tw2Vector2Curve.html">Tw2Vector2Curve</a></li><li><a href="Tw2Vector2Key.html">Tw2Vector2Key</a></li><li><a href="Tw2Vector2Parameter.html">Tw2Vector2Parameter</a></li><li><a href="Tw2Vector3Curve.html">Tw2Vector3Curve</a></li><li><a href="Tw2Vector3Key.html">Tw2Vector3Key</a></li><li><a href="Tw2Vector3Parameter.html">Tw2Vector3Parameter</a></li><li><a href="Tw2Vector4Parameter.html">Tw2Vector4Parameter</a></li><li><a href="Tw2VectorCurve.html">Tw2VectorCurve</a></li><li><a href="Tw2VectorKey.html">Tw2VectorKey</a></li><li><a href="Tw2VectorSequencer.html">Tw2VectorSequencer</a></li><li><a href="Tw2VertexDeclaration.html">Tw2VertexDeclaration</a></li><li><a href="Tw2VertexElement.html">Tw2VertexElement</a></li><li><a href="Tw2WbgTrack.html">Tw2WbgTrack</a></li><li><a href="Tw2WbgTransformTrack.html">Tw2WbgTransformTrack</a></li><li><a href="Tw2XYZScalarSequencer.html">Tw2XYZScalarSequencer</a></li><li><a href="Tw2YPRSequencer.html">Tw2YPRSequencer</a></li></ul><h3>Global</h3><ul><li><a href="global.html#ag_horner1">ag_horner1</a></li><li><a href="global.html#ag_zeroin">ag_zeroin</a></li><li><a href="global.html#ag_zeroin2">ag_zeroin2</a></li><li><a href="global.html#emitter">emitter</a></li><li><a href="global.html#EveStation">EveStation</a></li><li><a href="global.html#EveTurretSetLocatorInfo">EveTurretSetLocatorInfo</a></li><li><a href="global.html#Inherit">Inherit</a></li><li><a href="global.html#Perlin_init">Perlin_init</a></li><li><a href="global.html#Perlin_noise1">Perlin_noise1</a></li><li><a href="global.html#PerlinNoise1D">PerlinNoise1D</a></li><li><a href="global.html#polyZeroes">polyZeroes</a></li><li><a href="global.html#Tw2AnimationController">Tw2AnimationController</a></li><li><a href="global.html#Tw2EventEmitter">Tw2EventEmitter</a></li><li><a href="global.html#vec3Hermite">vec3Hermite</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 3.4.3</a> on Sun May 07 2017 02:25:29 GMT-0400 (EDT)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>
